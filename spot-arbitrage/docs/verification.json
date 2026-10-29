@@ -1,0 +1,5 @@
+{
+  "binance": true,
+  "okx": false,
+  "note": "Binance relevant official REST, filters and errors read from binance/binance-spot-api-docs. OKX official documentation inaccessible through current network policy; live integration remains locked until documentation review and adapter validation are completed. This file is not a user-configurable bypass."
+}

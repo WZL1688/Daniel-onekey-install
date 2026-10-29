@@ -1,0 +1,55 @@
+{
+  "type": "CURRENT_ENVIRONMENT_REAL_NETWORK_ATTEMPTS",
+  "startedAt": "2026-10-29T11:59:13.638Z",
+  "elapsedMs": 65570,
+  "localSamples": 65,
+  "localHttpAverageMs": 7,
+  "slotMs": 3000,
+  "expectedCycleMs": 9000,
+  "observedCycleMs": 59969,
+  "pollRounds": 2,
+  "successfulSampledPairs": [],
+  "counters": {
+    "binance": {
+      "public": 2,
+      "private": 0,
+      "orders": 0,
+      "failures": 2,
+      "limited": 0,
+      "delayed": 2,
+      "waitMs": 40399,
+      "latencyMs": 78,
+      "backoffReason": "请求失败短暂退避 (TypeError)，30 秒",
+      "httpStatuses": {
+        "NETWORK": 23
+      },
+      "averageExchangeAttemptMs": 39
+    },
+    "okx": {
+      "public": 2,
+      "private": 0,
+      "orders": 0,
+      "failures": 2,
+      "limited": 0,
+      "delayed": 2,
+      "waitMs": 40408,
+      "latencyMs": 77,
+      "backoffReason": "请求失败短暂退避 (TypeError)，30 秒",
+      "httpStatuses": {
+        "NETWORK": 23
+      },
+      "averageExchangeAttemptMs": 39
+    }
+  },
+  "liveTrading": false,
+  "batchesCreated": 0,
+  "pendingQueue": {
+    "binance": 1,
+    "okx": 1
+  },
+  "limitations": [
+    "网络请求失败 (TypeError)；网络请求失败 (TypeError)",
+    "网络请求失败 (TypeError)；网络请求失败 (TypeError)",
+    "网络请求失败 (TypeError)；网络请求失败 (TypeError)"
+  ]
+}

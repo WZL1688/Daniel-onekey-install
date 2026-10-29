@@ -1,0 +1,53 @@
+{
+  "type": "OFFICIAL_SHAPED_LOCAL_FIXTURE_NOT_EXCHANGE",
+  "startedAt": "2026-10-29T11:55:07.731Z",
+  "elapsedMs": 65768,
+  "localSamples": 65,
+  "localHttpAverageMs": 8,
+  "slotMs": 3000,
+  "expectedCycleMs": 9000,
+  "observedCycleMs": 9004,
+  "pollRounds": 21,
+  "successfulSampledPairs": [
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT"
+  ],
+  "counters": {
+    "binance": {
+      "public": 21,
+      "private": 0,
+      "orders": 0,
+      "failures": 0,
+      "limited": 0,
+      "delayed": 0,
+      "waitMs": 0,
+      "latencyMs": 45,
+      "backoffReason": "",
+      "httpStatuses": {},
+      "averageExchangeAttemptMs": 2
+    },
+    "okx": {
+      "public": 21,
+      "private": 0,
+      "orders": 0,
+      "failures": 0,
+      "limited": 0,
+      "delayed": 0,
+      "waitMs": 1,
+      "latencyMs": 47,
+      "backoffReason": "",
+      "httpStatuses": {},
+      "averageExchangeAttemptMs": 2
+    }
+  },
+  "liveTrading": false,
+  "batchesCreated": 0,
+  "pendingQueue": {
+    "binance": 0,
+    "okx": 0
+  },
+  "limitations": [
+    "本地协议夹具，不能作为交易所联网或实盘验收"
+  ]
+}

@@ -1,0 +1,22 @@
+[Unit]
+Description=Local dual exchange spot arbitrage manager
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Install this as a user service. Change the checkout path and Node path if needed.
+WorkingDirectory=%h/spot-arbitrage
+ExecStart=/usr/bin/node %h/spot-arbitrage/src/server.js
+Environment=PORT=8888
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
