@@ -1,0 +1,30 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { Store, Vault } from '../src/store.js';
+import { setup } from './helpers.js';
+test('凭据加密保存且公开接口完全不含密钥', t => {
+  const { store, vault, dir } = setup(t); const secret = 'secret-sensitive-string123';
+  vault.add({ exchange: 'binance', role: 'query', apiKey: 'api-sensitive-key1234', secret });
+  assert.equal(vault.open(store.state.keys[0]).secret, secret);
+  assert.ok(!fs.readFileSync(dir + '/state.json', 'utf8').includes(secret));
+  assert.ok(!JSON.stringify(vault.publicKeys()).includes(secret)); assert.ok(!JSON.stringify(vault.publicKeys()).includes('ciphertext'));
+  assert.equal(fs.statSync(dir + '/master.key').mode & 0o777, 0o600);
+});
+test('篡改加密数据会拒绝解密', t => { const { store, vault } = setup(t); vault.add({ exchange: 'binance', role: 'query', apiKey: 'abcdefghijk123', secret: 'abcdefghijk123' }); store.state.keys[0].sealed.tag = Buffer.alloc(16).toString('base64'); assert.throws(() => vault.open(store.state.keys[0])); });
+test('同一 Key 不可同时用于查询与交易', t => { const { vault } = setup(t); const k = { exchange: 'binance', apiKey: 'abcdefghijk123', secret: 'abcdefghijk123' }; vault.add({ ...k, role: 'query' }); assert.throws(() => vault.add({ ...k, role: 'trade', accountUid: '123', sameAccountConfirmed: true }), /兼任/); });
+test('未确认交易 Key 账户归属时拒绝保存', t => { const { vault } = setup(t); assert.throws(() => vault.add({ exchange: 'binance', role: 'trade', apiKey: 'abcdefghijk123', secret: 'abcdefghijk123' }), /同一账户/); });
+test('配置、限额、冷却和未知订单重启恢复；自动交易关闭', t => {
+  const { store, dir } = setup(t); store.state.config.amount = '321'; store.state.config.autoTrading = true;
+  store.state.rates.binance = { backoffUntil: Date.now() + 60000, windows: { configured: { used: 100, resetAt: Date.now() + 60000 } } };
+  store.state.cooldowns.foo = Date.now() + 10000;
+  store.state.batches = [{ id: 'unknown1', pair: 'BTC/USDT', status: 'SUBMITTING', legs: [{ status: 'SENDING' }] }]; store.save(); store.close();
+  const fresh = new Store(dir); t.after(() => fresh.close());
+  assert.equal(fresh.state.config.amount, '321'); assert.equal(fresh.state.config.autoTrading, false);
+  assert.equal(fresh.state.batches[0].legs[0].status, 'UNKNOWN'); assert.equal(fresh.state.batches[0].status, 'UNKNOWN');
+  assert.ok(fresh.state.blocks['BTC/USDT']); assert.equal(fresh.state.rates.binance.windows.configured.used, 100); assert.ok(fresh.state.cooldowns.foo > Date.now());
+});
+test('两腿受理重启仍需核对，不标记成交', t => { const { store, dir } = setup(t); store.state.batches = [{ id: 'x', pair: 'BTC/USDT', status: 'SUBMITTED', legs: [{ status: 'ACKNOWLEDGED' }] }]; store.save(); store.close(); const fresh = new Store(dir); t.after(() => fresh.close()); assert.equal(fresh.state.batches[0].status, 'SUBMITTED'); assert.ok(fresh.state.blocks['BTC/USDT']); });
+test('损坏持久化文件时拒绝启动，不能静默重置', t => { const { store, dir } = setup(t); store.close(); fs.writeFileSync(dir + '/state.json', '{bad'); assert.throws(() => new Store(dir)); assert.equal(fs.readFileSync(dir + '/state.json', 'utf8'), '{bad'); });
+test('同一数据目录禁止多个进程同时写入', t => { const { dir } = setup(t); assert.throws(() => new Store(dir), /另一进程/); });
+test('主密钥缺失但存在凭据时禁止生成新密钥', t => { const { store, vault, dir } = setup(t); vault.add({ exchange: 'binance', role: 'query', apiKey: 'abcdefghijk123', secret: 'abcdefghijk123' }); fs.unlinkSync(dir + '/master.key'); assert.throws(() => new Vault(store), /主加密密钥缺失/); });

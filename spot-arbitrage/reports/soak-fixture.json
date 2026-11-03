@@ -1,0 +1,63 @@
+{
+  "type": "OFFICIAL_SHAPED_LOCAL_FIXTURE_NOT_EXCHANGE",
+  "status": "COMPLETED",
+  "startedAt": "2026-11-03T08:45:45.841Z",
+  "completedAt": "2026-11-03T08:46:50.875Z",
+  "elapsedMs": 65034,
+  "bindHost": "127.0.0.1",
+  "servicePort": 45995,
+  "configuredPairs": [
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT"
+  ],
+  "localSamples": 64,
+  "localHttpAverageMs": 14,
+  "slotMs": 3000,
+  "expectedCycleMs": 9000,
+  "observedCycleMs": 9012,
+  "pollRounds": 21,
+  "successfulSampledPairs": [
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT"
+  ],
+  "counters": {
+    "binance": {
+      "public": 21,
+      "private": 0,
+      "orders": 0,
+      "failures": 0,
+      "limited": 0,
+      "delayed": 0,
+      "waitMs": 1,
+      "latencyMs": 173,
+      "backoffReason": "",
+      "httpStatuses": {},
+      "averageExchangeAttemptMs": 8
+    },
+    "okx": {
+      "public": 21,
+      "private": 0,
+      "orders": 0,
+      "failures": 0,
+      "limited": 0,
+      "delayed": 0,
+      "waitMs": 3,
+      "latencyMs": 208,
+      "backoffReason": "",
+      "httpStatuses": {},
+      "averageExchangeAttemptMs": 10
+    }
+  },
+  "liveTrading": false,
+  "batchesCreated": 0,
+  "pendingQueue": {
+    "binance": 0,
+    "okx": 0
+  },
+  "limitations": [
+    "本地协议夹具，不能作为交易所联网或实盘验收"
+  ],
+  "validationFailures": []
+}

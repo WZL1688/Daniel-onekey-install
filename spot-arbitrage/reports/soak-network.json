@@ -1,0 +1,65 @@
+{
+  "type": "CURRENT_ENVIRONMENT_REAL_NETWORK_ATTEMPTS",
+  "status": "COMPLETED",
+  "startedAt": "2026-11-03T08:45:47.450Z",
+  "completedAt": "2026-11-03T08:46:52.921Z",
+  "elapsedMs": 65471,
+  "bindHost": "127.0.0.1",
+  "servicePort": 8888,
+  "configuredPairs": [
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT"
+  ],
+  "localSamples": 65,
+  "localHttpAverageMs": 5,
+  "slotMs": 3000,
+  "expectedCycleMs": 9000,
+  "observedCycleMs": null,
+  "pollRounds": 3,
+  "successfulSampledPairs": [],
+  "counters": {
+    "binance": {
+      "public": 3,
+      "private": 0,
+      "orders": 0,
+      "failures": 3,
+      "limited": 0,
+      "delayed": 3,
+      "waitMs": 89511,
+      "latencyMs": 43,
+      "backoffReason": "请求失败短暂退避 (TypeError)，30 秒",
+      "httpStatuses": {
+        "NETWORK": 3
+      },
+      "averageExchangeAttemptMs": 14
+    },
+    "okx": {
+      "public": 3,
+      "private": 0,
+      "orders": 0,
+      "failures": 3,
+      "limited": 0,
+      "delayed": 3,
+      "waitMs": 89552,
+      "latencyMs": 29,
+      "backoffReason": "请求失败短暂退避 (TypeError)，30 秒",
+      "httpStatuses": {
+        "NETWORK": 3
+      },
+      "averageExchangeAttemptMs": 10
+    }
+  },
+  "liveTrading": false,
+  "batchesCreated": 0,
+  "pendingQueue": {
+    "binance": 1,
+    "okx": 1
+  },
+  "limitations": [
+    "网络请求失败 (TypeError)；网络请求失败 (TypeError)",
+    "网络请求失败 (TypeError)；网络请求失败 (TypeError)",
+    "网络请求失败 (TypeError)；网络请求失败 (TypeError)"
+  ],
+  "validationFailures": []
+}
