@@ -134,8 +134,10 @@ export class Exchanges {
     const old = this.store.state.exchangeMeta[exchange];
     if (!force && old?.rulesAt && Date.now() - old.rulesAt < 3600000 &&
       (exchange !== 'okx' || Object.values(this.store.state.rules.okx || {}).every(rule => Object.hasOwn(rule, 'maxUsdNotional')))) return;
+    // The official flag excludes unused permission-set content without limiting
+    // the symbol universe, trading filters, precision or exchange rate limits.
     const data = await this.request(exchange, { path: exchange === 'binance' ? '/api/v3/exchangeInfo' : '/api/v5/public/instruments',
-      params: exchange === 'binance' ? {} : { instType: 'SPOT' }, priority, weight: exchange === 'binance' ? 20 : 1, dedupe: exchange + ':rules', endpointCap: 4 });
+      params: exchange === 'binance' ? { showPermissionSets: 'false' } : { instType: 'SPOT' }, priority, weight: exchange === 'binance' ? 20 : 1, dedupe: exchange + ':rules', endpointCap: 4 });
     const rules = {};
     if (exchange === 'binance') {
       if (!Array.isArray(data.symbols) || !Array.isArray(data.rateLimits) || data.symbols.length === 0) throw Error('Binance 交易规则响应错误');

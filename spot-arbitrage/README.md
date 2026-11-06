@@ -21,6 +21,8 @@ npm start
 
 本机 HTTP 代理为 `127.0.0.1:7897` 的 Windows 用户可正常停服后双击 `4-start-proxy-7897-windows.cmd`；独立公开接口诊断使用 `3-diagnose-windows.cmd`，运行诊断前先停服以免叠加公共 API 用量。浏览器代理不会自动传给已经运行的 Node 服务。新版公共 OKX 行情先通过统一调度器校时，错误标明交易所并区分响应超时、中断、超限和格式错误，仍保留盘口时效保护。参见 [Windows 代理与诊断说明](docs/WINDOWS.md#本机代理与行情诊断) 和 [本次修复验收](docs/NETWORK_FIX_20261106.md)。
 
+后续已针对 Binance 全市场规则体积过大增加官方 `showPermissionSets=false` 参数，省略未使用的权限集合内容，保留全市场交易规则及 15 MB 大小保护。已有上一修复版的用户可只覆盖 `src/exchanges.js` 和 `scripts/diagnose-network.js`，无需更改依赖或运行数据。见 [规则体积修复验收](docs/BINANCE_RULES_FIX_20261106.md)。
+
 ## 已实现功能
 
 - 实时机会、动态平衡、账户余额、Key 状态、提交记录、API 调度、错误与设置八个页面。

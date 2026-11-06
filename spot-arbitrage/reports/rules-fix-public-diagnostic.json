@@ -1,0 +1,60 @@
+{
+  "scope": "PUBLIC_NETWORK_DIAGNOSTIC",
+  "publicOnly": true,
+  "privateRequests": 0,
+  "orderRequests": 0,
+  "exchanges": {
+    "binance": {
+      "requests": [
+        {
+          "route": "/api/v3/time",
+          "http": 451,
+          "elapsedMs": 388,
+          "bytes": 0,
+          "code": "HTTP_451_RESTRICTED_LOCATION"
+        }
+      ],
+      "stoppedAfterFailure": true
+    },
+    "okx": {
+      "requests": [
+        {
+          "route": "/api/v5/public/time",
+          "http": 200,
+          "elapsedMs": 474,
+          "bytes": 53,
+          "code": "OK"
+        },
+        {
+          "route": "/api/v5/public/instruments",
+          "http": 200,
+          "elapsedMs": 356,
+          "bytes": 1323306,
+          "code": "OK",
+          "items": 1210
+        },
+        {
+          "route": "/api/v5/market/books",
+          "http": 200,
+          "elapsedMs": 215,
+          "bytes": 24582,
+          "code": "OK",
+          "bidLevels": 400,
+          "askLevels": 400
+        }
+      ],
+      "clockOffsetMs": 151,
+      "clockRttWithin2000Ms": true,
+      "clockOffsetWithin30000Ms": true,
+      "localClockChangedDuringTimeRequest": false,
+      "localClockStable": true,
+      "clockTrustedForApp": true,
+      "estimatedBookAgeMs": 239,
+      "bookAgeEstimateTrusted": true,
+      "bookTimeWithinDefaultWindow": true
+    }
+  },
+  "publicRequests": 4,
+  "diagnosticsPassed": false,
+  "proxyMode": "environment"
+}

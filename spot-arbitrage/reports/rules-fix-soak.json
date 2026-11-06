@@ -1,0 +1,111 @@
+{
+  "type": "OFFICIAL_SHAPED_LOCAL_FIXTURE_NOT_EXCHANGE",
+  "status": "COMPLETED",
+  "startedAt": "2026-11-06T08:32:26.128Z",
+  "completedAt": "2026-11-06T08:33:31.403Z",
+  "elapsedMs": 65275,
+  "bindHost": "127.0.0.1",
+  "servicePort": 43211,
+  "configuredPairs": [
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT"
+  ],
+  "localSamples": 65,
+  "localHttpAverageMs": 4,
+  "slotMs": 3000,
+  "expectedCycleMs": 9000,
+  "observedCycleMs": 9005,
+  "pollRounds": 22,
+  "successfulSampledPairs": [
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT"
+  ],
+  "counters": {
+    "binance": {
+      "public": 23,
+      "private": 0,
+      "orders": 0,
+      "failures": 0,
+      "limited": 0,
+      "delayed": 0,
+      "waitMs": 0,
+      "latencyMs": 136,
+      "backoffReason": "",
+      "httpStatuses": {},
+      "averageExchangeAttemptMs": 6
+    },
+    "okx": {
+      "public": 25,
+      "private": 0,
+      "orders": 0,
+      "failures": 0,
+      "limited": 0,
+      "delayed": 0,
+      "waitMs": 0,
+      "latencyMs": 159,
+      "backoffReason": "",
+      "httpStatuses": {},
+      "averageExchangeAttemptMs": 6
+    }
+  },
+  "liveTrading": false,
+  "batchesCreated": 0,
+  "pendingQueue": {
+    "binance": 0,
+    "okx": 0
+  },
+  "limitations": [
+    "本地协议夹具与合成余额，不代表真实账户、交易所行情或实盘成交。",
+    "熔断触发、持久化及复位由独立政策、引擎和HTTP回归测试验证；本次连续观测保持零批次。"
+  ],
+  "validationFailures": [],
+  "scope": "FOUR_FEATURES_ENABLED_LOCAL_ONLY",
+  "configuredEnhancements": {
+    "costs": {
+      "rebalanceByQuote": {
+        "USDT": "0.05"
+      }
+    },
+    "filters": {
+      "minNetBps": "0",
+      "maxSpreadBps": "100",
+      "minDepthNotional": "100",
+      "maxBookSkewMs": 1000
+    },
+    "capital": {
+      "enabled": true,
+      "byExchange": {
+        "binance": {
+          "USDT": {
+            "reserve": "100",
+            "maxOrder": "50",
+            "maxHolding": null
+          }
+        },
+        "okx": {
+          "USDT": {
+            "reserve": "100",
+            "maxOrder": "50",
+            "maxHolding": null
+          }
+        }
+      }
+    },
+    "risk": {
+      "dailyLossByQuote": {
+        "USDT": "5"
+      }
+    }
+  },
+  "computedPairs": [
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT"
+  ],
+  "checkedPreviews": 90,
+  "unconfirmedPreviews": 282,
+  "userDataTouched": false,
+  "exchangeNetworkRequests": 0
+}

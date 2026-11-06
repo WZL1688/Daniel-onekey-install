@@ -1,11 +1,11 @@
 {
   "type": "OFFICIAL_SHAPED_LOCAL_FIXTURE_NOT_EXCHANGE",
   "status": "COMPLETED",
-  "startedAt": "2026-11-06T08:09:46.925Z",
-  "completedAt": "2026-11-06T08:10:52.194Z",
-  "elapsedMs": 65269,
+  "startedAt": "2026-11-06T08:32:26.128Z",
+  "completedAt": "2026-11-06T08:33:31.403Z",
+  "elapsedMs": 65275,
   "bindHost": "127.0.0.1",
-  "servicePort": 35367,
+  "servicePort": 43211,
   "configuredPairs": [
     "BTC/USDT",
     "ETH/USDT",
@@ -30,11 +30,11 @@
       "failures": 0,
       "limited": 0,
       "delayed": 0,
-      "waitMs": 1,
-      "latencyMs": 113,
+      "waitMs": 0,
+      "latencyMs": 136,
       "backoffReason": "",
       "httpStatuses": {},
-      "averageExchangeAttemptMs": 5
+      "averageExchangeAttemptMs": 6
     },
     "okx": {
       "public": 25,
@@ -43,8 +43,8 @@
       "failures": 0,
       "limited": 0,
       "delayed": 0,
-      "waitMs": 1,
-      "latencyMs": 150,
+      "waitMs": 0,
+      "latencyMs": 159,
       "backoffReason": "",
       "httpStatuses": {},
       "averageExchangeAttemptMs": 6

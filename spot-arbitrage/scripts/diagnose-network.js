@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 
 const routes = {
-  binance: ['https://api.binance.com/api/v3/time', 'https://api.binance.com/api/v3/exchangeInfo', 'https://api.binance.com/api/v3/depth?symbol=ETHUSDT&limit=100'],
+  binance: ['https://api.binance.com/api/v3/time', 'https://api.binance.com/api/v3/exchangeInfo?showPermissionSets=false', 'https://api.binance.com/api/v3/depth?symbol=ETHUSDT&limit=100'],
   okx: ['https://www.okx.com/api/v5/public/time', 'https://www.okx.com/api/v5/public/instruments?instType=SPOT', 'https://www.okx.com/api/v5/market/books?instId=ETH-USDT&sz=400'],
 };
 const maxBytes = 15000000;
