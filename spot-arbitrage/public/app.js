@@ -1,6 +1,12 @@
 const $ = s => document.querySelector(s);
 const h = x => String(x ?? '—').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const n = x => x == null ? '—' : Number(x).toLocaleString('en-US', { maximumFractionDigits: 8 });
+const n = x => {
+  if (x == null) return '—';
+  const value = Number(x);
+  if (!Number.isFinite(value)) return '—';
+  return value.toLocaleString('en-US', value !== 0 && Math.abs(value) < 1e-8
+    ? { maximumSignificantDigits: 12, useGrouping: false } : { maximumFractionDigits: 8 });
+};
 const time = x => x ? new Date(x).toLocaleString('zh-CN', { hour12: false }) : '—';
 const tag = (text, kind = '') => `<span class="tag ${kind}">${h(text)}</span>`;
 const pnl = x => `<span class="number ${Number(x) < 0 ? 'negative' : 'positive'}">${h(n(x))}</span>`;
@@ -57,6 +63,49 @@ function riskPanel() {
   const blocked = riskResetBlocked();
   return card('风险熔断', `<p>${tag(r.latched ? '已锁定 · 停止新单' : '未熔断', r.latched ? 'bad' : 'good')}　统计日 ${h(r.day)}（${h(r.timeZone || 'Asia/Shanghai')}）<br>仅累计人工核对的实际亏损，盈利不抵消亏损，预计再平衡成本不重复计入。熔断停止新单，不会自动平仓；重启、跨日或提高限额均不会自动解除。</p>${table(['报价资产', '当日已核对累计亏损', '当日亏损限额', '持久化熔断'], rows, '尚无已核对亏损或限额；可在设置中按报价资产配置。')}<p>${h(blocked || '复位前须确认库存和异常；当日亏损仍达到限额时，后台将拒绝复位。')}</p>`, `<button id="risk-reset" ${blocked ? 'disabled' : ''}>人工复位熔断</button>`);
 }
+function scannerPoolIncludes(id) {
+  const excluded = state.config.scanExcludeAssets ?? ['BTC', 'ETH', 'SOL'];
+  const included = state.config.scanPairs ?? [];
+  return id.endsWith('/' + state.config.scanQuote) && !excluded.includes(id.split('/')[0]) && (!included.length || included.includes(id));
+}
+function scannerSample(entry, direction = {}) {
+  const sampledAt = direction.sampleAt ?? direction.at ?? entry.at;
+  const age = state.now - sampledAt;
+  const failed = Boolean(entry.failed || entry.error || entry.failedAt);
+  const fresh = !failed && !entry.stale && Number.isFinite(sampledAt) && age >= 0 && age <= state.config.maxBookAgeMs;
+  const hasProfit = direction.conservative != null && direction.conservative !== '' && Number.isFinite(Number(direction.conservative));
+  return { direction, sampledAt, failed, fresh, hasProfit, eligible: fresh && direction.eligible === true && Boolean(direction.qty) };
+}
+function scannerRank(sample) { return sample.eligible ? 0 : sample.fresh && sample.hasProfit ? 1 : sample.fresh ? 2 : sample.failed ? 4 : 3; }
+function scannerCompare(a, b) {
+  return scannerRank(a) - scannerRank(b) || (a.hasProfit && b.hasProfit ? Number(b.direction.conservative) - Number(a.direction.conservative) : 0);
+}
+function scannerProfit(value, fresh) {
+  if (value == null || value === '' || !Number.isFinite(Number(value))) return '—';
+  return fresh ? pnl(value) : `<span class="muted number">历史 ${h(n(value))}</span>`;
+}
+function scannerPanel() {
+  const run = state.engine.scanRun, active = ['PREPARING', 'RUNNING'].includes(run?.status);
+  const labels = { PREPARING: '正在准备', RUNNING: '扫描中', COMPLETED: '本轮完成', STOPPED: '已停止', INTERRUPTED: '重启后已中断', FAILED: '扫描失败' };
+  const entries = Object.entries(state.scanResults || {}).filter(([id]) => scannerPoolIncludes(id)).map(([id, entry]) => {
+    const directions = (entry.directions || []).map(direction => scannerSample(entry, direction)).sort(scannerCompare);
+    return { id, entry, ...(directions[0] || scannerSample(entry)) };
+  }).sort((a, b) => scannerCompare(a, b) || Number(b.entry.at || 0) - Number(a.entry.at || 0) || a.id.localeCompare(b.id));
+  const progress = run ? `<p>${tag(labels[run.status] || run.status, active ? 'good' : '')}　已处理 ${h(run.completed ?? 0)} / ${h(run.total ?? 0)}，其中失败 ${h(run.failed ?? 0)}${run.currentPair ? ' · 当前 ' + h(run.currentPair) : ''}<br>开始 ${h(time(run.startedAt))} · 结束 ${h(time(run.endedAt))}${run.error ? '<br><span class="negative">' + h(run.error) + '</span>' : ''}${run.reason ? '<br><span class="muted">说明：' + h(run.reason) + '</span>' : ''}</p>` : '<p>尚未开始本轮筛选。点击“开始一轮筛选”后显示进度。</p>';
+  const rows = entries.slice(0, 50).map(sample => {
+    const { id, entry, direction: d, fresh, failed, sampledAt, eligible } = sample;
+    const watched = state.config.pairs.includes(id), blocked = state.config.autoTrading || state.engine.busy || watched || state.config.pairs.length >= 30;
+    const details = (entry.directions || []).map(direction => {
+      const attempts = direction.attempts?.length ? direction.attempts : [direction];
+      return `<div><p><b>${h(names[direction.buyExchange] || direction.buyExchange)} → ${h(names[direction.sellExchange] || direction.sellExchange)}</b></p>${capitalPreview(direction)}<p>${attempts.map(attempt => `试算金额 ${h(attempt.amount ?? direction.amount ?? '—')}：深度净利 ${h(n(attempt.net))}，保守净利 ${h(n(attempt.conservative))}<br>${reasons(attempt)}`).join('<br>')}</p></div>`;
+    }).join('') || '<p>尚无有效深度计算。</p>';
+    return `<tr data-scan-pair="${h(id)}"><td><b>${h(id)}</b><br>${tag(failed ? '最近失败' : fresh ? eligible ? '通过 · 待复核' : '不满足' : '已过期', failed ? 'bad' : eligible ? 'good' : '')}</td><td>${h(time(sampledAt || entry.at))}${entry.failedAt ? '<br><span class="negative">最近失败 ' + h(time(entry.failedAt)) + '</span>' : ''}</td><td>${h(names[d.buyExchange] || d.buyExchange)} → ${h(names[d.sellExchange] || d.sellExchange)}<br>金额 ${h(d.amount ?? '—')}</td><td>深度 ${scannerProfit(d.net, fresh)}<br>保守 ${scannerProfit(d.conservative, fresh)}<br><span class="muted">${fresh ? '' : '历史 '}收益率 ${h(n(d.netBps))} bp</span></td><td class="number">买侧 ${h(n(d.buyDepthNotional))}<br>卖侧 ${h(n(d.sellDepthNotional))}</td><td class="reason">${failed ? '<span class="negative">' + h(entry.error || '最近筛选失败，历史计算已失效') + '</span><br>' : ''}${!fresh ? '<span class="muted">历史数据不能视为当前机会；加入关注后重新采样。</span>' : ''}${d.capital?.enabled && !d.capital.checked ? '<span class="muted">资金未核对，当前仅为盘口估计。</span>' : ''}<details><summary>不成交原因与各金额试算</summary>${details}</details></td><td><button data-watch="${h(id)}" ${blocked ? 'disabled' : ''}>${watched ? '已关注' : '加入关注'}</button></td></tr>`;
+  });
+  const excluded = state.config.scanExcludeAssets ?? ['BTC', 'ETH', 'SOL'];
+  const included = state.config.scanPairs ?? [];
+  const note = `<p>按两所共同现货市场筛选，排除 ${h(excluded.join(', ') || '无')}；${included.length ? '限定候选 ' + h(included.length) + ' 对' : '候选范围为全部共同市场'}。可在设置中编辑名单，并使用有效深度及利润门槛过滤。这里没有真实流通市值数据；低单价或低成交额不代表小市值。同名交易对仍需核对为同一资产。<br>每次一对，间隔至少 10 秒，实时机会优先；实盘时暂停筛选。按有效且满足门槛的保守净利润优先排序，过期与失败结果仅作历史参考，最多显示前 50 项。加入关注只更新监控名单，不提交交易；关注最多 30 对，数量增加会延长轮询。</p>`;
+  return card('中小币候选池（低优先级）', note + progress + table(['交易对 / 状态', '采样时间', '买入 → 卖出 / 试算金额', '扣费净收益 / 收益率', '限价内有效深度', '失败与试算原因', '操作'], rows, '当前候选池尚无扫描结果；请先保存排除与候选名单，再开始一轮筛选。'), `<div class="actions"><button id="scan" ${state.config.autoTrading || state.engine.busy || active ? 'disabled' : ''}>开始一轮筛选</button><button id="scan-stop" ${!active && !state.config.scannerAuto ? 'disabled' : ''}>停止筛选</button></div>`);
+}
 function opportunities() {
   const opportunities = Object.values(state.opportunities), rates = Object.values(state.rates);
   const eligible = opportunities.flatMap(x => x.directions || []).filter(x => x.eligible && state.now - (x.sampleAt || 0) <= state.config.maxBookAgeMs).length;
@@ -78,7 +127,7 @@ function opportunities() {
     });
     html += `<div class="grid2">${books.join('')}</div>`;
   }
-  html += card('全市场筛选（低优先级）', `<p>只筛选双方共同现货市场，每次一个交易对。实盘运行时暂停全市场扫描，避免占用最终复核和机会额度。</p>${table(['交易对', '最近采样', '买入 → 卖出', '保守利润'], Object.entries(state.scanResults).sort((a, b) => b[1].at - a[1].at).slice(0, 15).map(([id, x]) => { const best = x.directions.filter(y => y.conservative).sort((a, b) => Number(b.conservative) - Number(a.conservative))[0]; return `<tr><td>${h(id)}</td><td>${h(time(x.at))}</td><td>${h(names[best?.buyExchange])} → ${h(names[best?.sellExchange])}</td><td>${pnl(best?.conservative)}</td></tr>`; }))}`, '<button id="scan">开始一轮筛选</button>');
+  html += scannerPanel();
   return html;
 }
 function balance() {
@@ -125,11 +174,11 @@ function settings() {
   const input = (label, name, value, extra = '') => `<label>${h(label)}<input name="${name}" value="${h(value ?? '')}" ${extra}></label>`;
   const quotes = [...new Set([...c.pairs.map(id => id.split('/')[1]), ...Object.keys(costs), ...Object.keys(limits)])].sort();
   const capitalRows = Object.entries(capital.byExchange || {}).flatMap(([ex, assets]) => Object.entries(assets).map(([asset, caps]) => capitalPolicyRow(ex, asset, caps)));
-  return card('交易与轮询设置', `<form id="settings-form"><div class="form-grid">${input('关注交易对（逗号分隔）', 'pairs', c.pairs.join(', '))}${input('默认金额（报价资产）', 'amount', c.amount)}${input('备用金额（依次尝试，逗号分隔）', 'fallbackAmounts', c.fallbackAmounts.join(', '))}${input('固定缓冲（报价资产；无额外固定比例滑点）', 'buffer', c.buffer)}${input('Binance taker 费率（0.001 = 0.1%）', 'binanceFee', c.fees.binance)}${input('OKX taker 费率', 'okxFee', c.fees.okx)}${input('深度净利润门槛', 'minDepthProfit', c.minDepthProfit)}${input('限价保守净利润门槛', 'minProfit', c.minProfit)}${input('盘口最大时效（毫秒）', 'maxBookAgeMs', c.maxBookAgeMs, 'type="number"')}${input('余额最大时效（毫秒）', 'maxBalanceAgeMs', c.maxBalanceAgeMs, 'type="number"')}${input('每个交易对轮次间隔（毫秒）', 'slotMs', c.slotMs, 'type="number"')}${input('后台余额刷新间隔（毫秒）', 'balanceRefreshMs', c.balanceRefreshMs, 'type="number"')}${input('Binance 权重上限 / 分钟（100–1200）', 'binanceBudget', c.budgets.binance, 'type="number"')}${input('OKX 请求上限 / 分钟（100–240）', 'okxBudget', c.budgets.okx, 'type="number"')}<label>未知提交处理<select name="unknownAction"><option value="pause" ${c.unknownAction === 'pause' ? 'selected' : ''}>暂停并保留阻塞</option><option value="archive" ${c.unknownAction === 'archive' ? 'selected' : ''}>归档并保留阻塞</option></select></label>${input('全市场扫描报价资产', 'scanQuote', c.scanQuote)}</div>
+  return card('交易与轮询设置', `<form id="settings-form"><div class="form-grid">${input('关注交易对（逗号分隔）', 'pairs', c.pairs.join(', '))}${input('默认金额（报价资产）', 'amount', c.amount)}${input('备用金额（依次尝试，逗号分隔）', 'fallbackAmounts', c.fallbackAmounts.join(', '))}${input('固定缓冲（报价资产；无额外固定比例滑点）', 'buffer', c.buffer)}${input('Binance taker 费率（0.001 = 0.1%）', 'binanceFee', c.fees.binance)}${input('OKX taker 费率', 'okxFee', c.fees.okx)}${input('深度净利润门槛', 'minDepthProfit', c.minDepthProfit)}${input('限价保守净利润门槛', 'minProfit', c.minProfit)}${input('盘口最大时效（毫秒）', 'maxBookAgeMs', c.maxBookAgeMs, 'type="number"')}${input('余额最大时效（毫秒）', 'maxBalanceAgeMs', c.maxBalanceAgeMs, 'type="number"')}${input('每个交易对轮次间隔（毫秒）', 'slotMs', c.slotMs, 'type="number"')}${input('后台余额刷新间隔（毫秒）', 'balanceRefreshMs', c.balanceRefreshMs, 'type="number"')}${input('Binance 权重上限 / 分钟（100–1200）', 'binanceBudget', c.budgets.binance, 'type="number"')}${input('OKX 请求上限 / 分钟（100–240）', 'okxBudget', c.budgets.okx, 'type="number"')}<label>未知提交处理<select name="unknownAction"><option value="pause" ${c.unknownAction === 'pause' ? 'selected' : ''}>暂停并保留阻塞</option><option value="archive" ${c.unknownAction === 'archive' ? 'selected' : ''}>归档并保留阻塞</option></select></label>${input('候选池报价资产', 'scanQuote', c.scanQuote)}${input('扫描排除基础币（逗号分隔）', 'scanExcludeAssets', (c.scanExcludeAssets ?? ['BTC', 'ETH', 'SOL']).join(', '))}${input('扫描候选交易对（留空为全部共同市场）', 'scanPairs', (c.scanPairs ?? []).join(', '))}</div>
     <h3>成本与流动性筛选</h3><p>再平衡成本按报价资产设置，只影响普通套利；净利润与保守净利润中各扣一次，不能另填入两侧费率。收益率门槛同样只影响普通套利；其他流动性保护适用于所有新单。留空表示不启用可选筛选，填写 0 保留零值含义。</p><div class="form-grid">${input('最低保守净收益率（bp；买入最坏成本口径）', 'filterMinNetBps', filters.minNetBps ?? '0', 'inputmode="decimal"')}${input('每所最大盘口价差（bp；留空不限）', 'filterMaxSpreadBps', filters.maxSpreadBps, 'inputmode="decimal"')}${input('每侧限价内最小有效深度（报价资产）', 'filterMinDepthNotional', filters.minDepthNotional ?? '0', 'inputmode="decimal"')}${input('两所盘口本机接收最大时差（毫秒；留空不限）', 'filterMaxBookSkewMs', filters.maxBookSkewMs, 'type="number" min="0" max="60000" step="1"')}</div>
     <h3>按报价资产配置成本与风险限额</h3><p>亏损限额按 Asia/Shanghai 自然日统计人工核对的实际亏损，盈利不抵消；空白不设限额，0 表示出现任何实际亏损即熔断。删除或提高限额不会解除已有熔断。</p><div id="quote-policies">${table(['报价资产', '单批再平衡成本估计', '当日已核对亏损限额', '操作'], quotes.map(q => quotePolicyRow(q, costs[q] ?? '0', limits[q] ?? '')))}</div><button id="add-quote-policy" type="button">增加报价资产</button>
     <h3>每所、每资产资金配额</h3><label><input type="checkbox" name="capitalEnabled" ${capital.enabled ? 'checked' : ''}>启用资金配额与预留库存</label><p>数量均以该行资产计。预留从可用余额中保留；单批最大支出作用于买入端报价资产和卖出端基础资产。买入后最大总库存仅限制买入的基础资产，不能假定另一腿成交抵消。上限留空不限，显式填写 0 禁止相应额度；未配置资产没有自定义上限。配额缩量后，后台重新计算深度、限价及利润。</p><div id="capital-policies">${table(['交易所', '资产', '预留可用库存', '单批最大支出', '买入后最大总库存', '操作'], capitalRows, '尚无自定义配额；点击“增加资产配额”配置。')}</div><button id="add-capital-policy" type="button">增加资产配额</button>
-    <p><label><input name="feeConfirmed" type="checkbox" ${c.feeConfirmed ? 'checked' : ''}>已核对两所账户真实 taker 手续费（费率估算不保证最终费用币种）</label><label><input name="scannerAuto" type="checkbox" ${c.scannerAuto ? 'checked' : ''}>启用自动全市场筛选（仅实盘关闭时运行）</label></p><div class="actions"><button class="primary" type="submit">保存设置</button></div></form>`) + riskPanel();
+    <p><label><input name="feeConfirmed" type="checkbox" ${c.feeConfirmed ? 'checked' : ''}>已核对两所账户真实 taker 手续费（费率估算不保证最终费用币种）</label><label><input name="scannerAuto" type="checkbox" ${c.scannerAuto ? 'checked' : ''}>启用自动候选池筛选（仅实盘关闭时运行）</label></p><div class="actions"><button class="primary" type="submit">保存设置</button></div></form>`) + riskPanel();
 }
 function render() {
   if (!state) return;
@@ -172,7 +221,23 @@ document.addEventListener('click', async e => {
     }
     if (button.id === 'live') return modal('确认开启真实交易', '<p>双交易所无法原子成交；第一腿受理后第二腿可能失败，IOC 也可能部分成交。提交后不会自动查询成交或补单。请先备妥两边库存。</p><label>输入“确认开启实盘并理解双腿风险”<input name="confirm" autocomplete="off"></label>', async x => { await api('/api/live', { enabled: true, confirm: x.confirm }); });
     if (button.id === 'stop') { await api('/api/live', { enabled: false }); notice('已停止实盘；已发送订单不会因此自动撤销。'); }
-    if (button.id === 'scan') { await api('/api/scan', {}); notice('筛选已排队，实盘运行时暂停扫描。'); }
+    if (button.id === 'scan') {
+      if (state.config.autoTrading || state.engine.busy || ['PREPARING', 'RUNNING'].includes(state.engine.scanRun?.status)) throw Error('请先停止实盘或等待当前筛选完成');
+      await api('/api/scan', {}); notice('候选池新一轮筛选已排队，进度将在页面显示。');
+    }
+    if (button.id === 'scan-stop') {
+      if (!['PREPARING', 'RUNNING'].includes(state.engine.scanRun?.status) && !state.config.scannerAuto) return;
+      await api('/api/scan/stop', {}); notice('已停止候选池筛选；实时行情监控继续运行。');
+    }
+    if (button.dataset.watch) {
+      const id = button.dataset.watch;
+      if (state.config.autoTrading || state.engine.busy) throw Error('请先停止实盘并等待正在执行的批次完成');
+      if (state.config.pairs.includes(id)) throw Error('该交易对已经在关注列表');
+      if (state.config.pairs.length >= 30) throw Error('关注交易对已达到 30 对上限，请先在设置中精简');
+      if (!state.scanResults[id] || !scannerPoolIncludes(id) || !/^[A-Z0-9]{2,15}\/[A-Z0-9]{2,15}$/.test(id)) throw Error('该交易对不在当前候选池');
+      await api('/api/config', { config: { pairs: [...state.config.pairs, id] } });
+      notice('已加入关注，后台将重新采样；未提交交易。');
+    }
     if (button.id === 'refresh-balances') { await api('/api/balances/refresh', {}); notice('余额刷新已排队。'); }
     if (button.dataset.validate) { await api('/api/keys/validate', { id: button.dataset.validate }); notice('查询 Key 验证已排队。'); }
     if (button.dataset.toggle) await api('/api/keys/toggle', { id: button.dataset.toggle, enabled: button.dataset.enabled === 'true' });
@@ -228,7 +293,7 @@ document.addEventListener('submit', async e => {
   e.preventDefault(); const f = new FormData(e.target), get = x => f.get(x);
   const config = { pairs: get('pairs').split(',').map(x => x.trim().toUpperCase()).filter(Boolean), amount: get('amount'), fallbackAmounts: get('fallbackAmounts').split(',').map(x => x.trim()).filter(Boolean),
     fees: { binance: get('binanceFee'), okx: get('okxFee') }, buffer: get('buffer'), minProfit: get('minProfit'), minDepthProfit: get('minDepthProfit'),
-    budgets: { binance: Number(get('binanceBudget')), okx: Number(get('okxBudget')) }, unknownAction: get('unknownAction'), scanQuote: get('scanQuote').toUpperCase(), feeConfirmed: f.has('feeConfirmed'), scannerAuto: f.has('scannerAuto') };
+    budgets: { binance: Number(get('binanceBudget')), okx: Number(get('okxBudget')) }, unknownAction: get('unknownAction'), scanQuote: get('scanQuote').toUpperCase(), scanExcludeAssets: get('scanExcludeAssets').split(',').map(x => x.trim().toUpperCase()).filter(Boolean), scanPairs: get('scanPairs').split(',').map(x => x.trim().toUpperCase()).filter(Boolean), feeConfirmed: f.has('feeConfirmed'), scannerAuto: f.has('scannerAuto') };
   for (const field of ['maxBookAgeMs', 'maxBalanceAgeMs', 'slotMs', 'balanceRefreshMs']) config[field] = Number(get(field));
   try { Object.assign(config, policyConfig(e.target, f)); await api('/api/config', { config }); editing = false; notice('设置已保存。'); await refresh(); } catch (err) { notice(err.message); }
 });

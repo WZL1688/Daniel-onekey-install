@@ -10,10 +10,11 @@ export const defaults = () => ({
     fees: { binance: '0.001', okx: '0.001' }, feeConfirmed: false, buffer: '0.05', minProfit: '0.2', minDepthProfit: '0.2',
     maxBookAgeMs: 5000, maxBalanceAgeMs: 15000, slotMs: 3000, balanceRefreshMs: 60000,
     budgets: { binance: 600, okx: 120 }, autoTrading: false, unknownAction: 'pause', scannerAuto: false, scanQuote: 'USDT',
+    scanExcludeAssets: ['BTC', 'ETH', 'SOL'], scanPairs: [],
     balance: {}, ...enhancementDefaults() },
   keys: [], accounts: {}, balances: {}, books: {}, rules: {}, exchangeMeta: {}, opportunities: {}, scanResults: {},
   batches: [], blocks: {}, cooldowns: {}, rates: {}, errors: [], events: [],
-  engine: { cursor: 0, lastPollAt: 0, lastCycleAt: 0, cycleMs: null, polls: 0, lastBalanceAt: 0, scanCursor: 0 },
+  engine: { cursor: 0, lastPollAt: 0, lastCycleAt: 0, cycleMs: null, polls: 0, lastBalanceAt: 0, scanCursor: 0, scanRun: null },
 });
 export class Store {
   constructor(dir) {
@@ -26,7 +27,16 @@ export class Store {
       this.state = fs.existsSync(this.file) ? JSON.parse(fs.readFileSync(this.file, 'utf8')) : defaults();
       if (this.state.version !== 1 || !Array.isArray(this.state.batches) || !this.state.config || !this.state.rates) throw Error('不支持或损坏的数据文件');
       const fallback = defaults();
-      this.state = { ...fallback, ...this.state, config: { ...fallback.config, ...this.state.config } };
+      this.state = { ...fallback, ...this.state, config: { ...fallback.config, ...this.state.config }, engine: { ...fallback.engine, ...this.state.engine } };
+      for (const [field, expression] of [['scanExcludeAssets', /^[A-Z0-9]{2,15}$/], ['scanPairs', /^[A-Z0-9]{2,15}\/[A-Z0-9]{2,15}$/]]) {
+        const values = this.state.config[field];
+        if (!Array.isArray(values) || values.length > 300 || new Set(values).size !== values.length || values.some(value => typeof value !== 'string' || !expression.test(value) || (field === 'scanPairs' && value.split('/')[0] === value.split('/')[1]))) throw Error('候选池配置损坏：' + field);
+      }
+      const scanRun = this.state.engine.scanRun;
+      if (scanRun && ['PREPARING', 'RUNNING'].includes(scanRun.status)) {
+        scanRun.status = 'INTERRUPTED'; scanRun.endedAt = Date.now(); scanRun.currentPair = null;
+        scanRun.reason = '服务重启，中断的筛选不会自动续跑'; scanRun.ids = [];
+      }
       this.state.config.autoTrading = false;
       initializeEnhancements(this.state);
       for (const batch of this.state.batches) {

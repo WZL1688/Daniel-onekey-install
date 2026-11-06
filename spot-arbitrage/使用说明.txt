@@ -15,9 +15,10 @@ Windows：
 
 不需要 Ubuntu，不要求管理员权限。原生 Windows 尚无完整实机验收，详见 docs/WINDOWS.md。
 
-当前可用：本地管理界面、四项配置、可访问交易所的公共行情监控。
+当前可用：本地管理界面、四项配置、公共行情监控和中小币候选池。
+候选池：设置中编辑排除基础币（默认 BTC/ETH/SOL）和限定候选对，保存后在首页下方开始一轮筛选。它不使用真实市值数据；加入关注仅更新监控，不下单。详情 docs/SCANNER_CANDIDATES.md。
 当前未完成：真实账户与实盘验收；OKX 仍有实盘锁，非 USD 报价限额换算未验证时会拒绝下单；云端 Binance 返回地域限制451。
 本版本不能承诺直接用真金白银自动套利。不要自行改验证标志绕过限制。
 
 Key 仅在自己的本机界面输入，禁止发到聊天。不要共享 data 文件夹或 master.key。
-请阅读 README.md、docs/NETWORK_FIX_20261106.md 和 docs/RELEASE_REVIEW.md，了解本次修复、测试结果和剩余限制。
+请阅读 README.md、docs/SCANNER_RELEASE_20261106.md、docs/SCANNER_CANDIDATES.md 和 docs/RELEASE_REVIEW.md，了解本次修复、测试结果和剩余限制。

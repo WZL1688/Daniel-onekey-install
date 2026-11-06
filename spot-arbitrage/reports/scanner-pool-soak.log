@@ -1,0 +1,93 @@
+(node:37958) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
+(Use `node --trace-warnings ...` to show where the warning was created)
+LOCAL SCANNER 14s: HTTP OK, 2/3, status=RUNNING
+LOCAL SCANNER 29s: HTTP OK, 3/3, status=COMPLETED
+LOCAL SCANNER 44s: HTTP OK, 3/3, status=COMPLETED
+LOCAL SCANNER 59s: HTTP OK, 3/3, status=COMPLETED
+{
+  "type": "OFFICIAL_SHAPED_LOCAL_FIXTURE_NOT_EXCHANGE",
+  "status": "COMPLETED",
+  "startedAt": "2026-11-06T09:34:16.885Z",
+  "completedAt": "2026-11-06T09:35:22.135Z",
+  "elapsedMs": 65250,
+  "bindHost": "127.0.0.1",
+  "servicePort": 37121,
+  "configuredPairs": [
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT"
+  ],
+  "localSamples": 65,
+  "localHttpAverageMs": 4,
+  "slotMs": 3000,
+  "expectedCycleMs": 9000,
+  "observedCycleMs": 9005,
+  "pollRounds": 22,
+  "successfulSampledPairs": [
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT"
+  ],
+  "counters": {
+    "binance": {
+      "public": 26,
+      "private": 0,
+      "orders": 0,
+      "failures": 0,
+      "limited": 0,
+      "delayed": 0,
+      "waitMs": 2,
+      "latencyMs": 118,
+      "backoffReason": "",
+      "httpStatuses": {},
+      "averageExchangeAttemptMs": 5
+    },
+    "okx": {
+      "public": 28,
+      "private": 0,
+      "orders": 0,
+      "failures": 0,
+      "limited": 0,
+      "delayed": 0,
+      "waitMs": 0,
+      "latencyMs": 154,
+      "backoffReason": "",
+      "httpStatuses": {},
+      "averageExchangeAttemptMs": 6
+    }
+  },
+  "liveTrading": false,
+  "batchesCreated": 0,
+  "pendingQueue": {
+    "binance": 0,
+    "okx": 0
+  },
+  "limitations": [
+    "所有币种价格、规则及正利润来自本地合成夹具，不是实际小币机会或市值数据。",
+    "未使用真实 Key、私人接口或订单；不能作为实盘验收。"
+  ],
+  "validationFailures": [],
+  "scope": "SCANNER_CANDIDATE_POOL_LOCAL_ONLY",
+  "scanRun": {
+    "id": "09e0e7d6-193e-4d76-a4f8-d8aa0e6e8f56",
+    "mode": "manual",
+    "status": "COMPLETED",
+    "total": 3,
+    "completed": 3,
+    "failed": 0,
+    "startedAt": 1793957656880,
+    "endedAt": 1793957677160,
+    "currentPair": null,
+    "reason": null,
+    "error": null
+  },
+  "scannedPairs": [
+    "TSTA/USDT",
+    "TSTB/USDT",
+    "TSTC/USDT"
+  ],
+  "freshObservations": 15,
+  "historicalObservations": 147,
+  "exchangeNetworkRequests": 0,
+  "userDataTouched": false
+}

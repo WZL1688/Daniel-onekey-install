@@ -15,7 +15,7 @@ export const rule = () => ({ enabled: true, symbol: 'BTCUSDT', step: '0.01', tic
 export const book = (id = 'BTC/USDT', bid = '99', ask = '100') => normalizeBook({ pair: id, at: Date.now(), bids: [[bid, '100']], asks: [[ask, '100']] }, id);
 export function readyEngine(t, options = {}) {
   const x = setup(t), s = x.store.state;
-  s.config.pairs = ['BTC/USDT']; s.config.feeConfirmed = true;
+  s.config.pairs = ['BTC/USDT']; s.config.feeConfirmed = true; s.config.scanExcludeAssets = [];
   s.accounts = { binance: '123', okx: '456' };
   for (const ex of ['binance', 'okx']) {
     x.vault.add({ exchange: ex, role: 'query', apiKey: ex + 'querykey1234', secret: 'test-query-secret-123', passphrase: 'test-passphrase' });

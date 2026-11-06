@@ -21,13 +21,21 @@ function mergeSettings(previous, patch) {
 export function validateConfig(input, previous, confirmation) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw Error('设置格式错误');
   const allowed = ['exchanges', 'pairs', 'amount', 'fallbackAmounts', 'fees', 'feeConfirmed', 'buffer', 'minProfit', 'minDepthProfit',
-    'maxBookAgeMs', 'maxBalanceAgeMs', 'slotMs', 'balanceRefreshMs', 'budgets', 'unknownAction', 'scannerAuto', 'scanQuote', 'balance',
+    'maxBookAgeMs', 'maxBalanceAgeMs', 'slotMs', 'balanceRefreshMs', 'budgets', 'unknownAction', 'scannerAuto', 'scanQuote', 'scanExcludeAssets', 'scanPairs', 'balance',
     'costs', 'filters', 'capital', 'risk'];
   if (Object.keys(input).some(k => !allowed.includes(k))) throw Error('设置包含未允许的字段；实盘必须单独确认');
   const next = mergeSettings(previous, input);
   if (!Array.isArray(next.exchanges) || next.exchanges.length !== 2 || new Set(next.exchanges).size !== 2 || next.exchanges.some(x => !['binance', 'okx'].includes(x))) throw Error('请选择 Binance 和 OKX 两个不同现货交易所');
   if (!Array.isArray(next.pairs) || next.pairs.length < 1 || next.pairs.length > 30 || new Set(next.pairs).size !== next.pairs.length) throw Error('关注交易对数量应为 1–30 且不可重复');
   next.pairs.forEach(pair);
+  if (next.scanExcludeAssets === undefined) next.scanExcludeAssets = ['BTC', 'ETH', 'SOL'];
+  if (next.scanPairs === undefined) next.scanPairs = [];
+  for (const field of ['scanExcludeAssets', 'scanPairs']) {
+    const values = next[field];
+    if (!Array.isArray(values) || values.length > 300 || new Set(values).size !== values.length || values.some(value => typeof value !== 'string')) throw Error(`${field} 必须为不重复且不超过 300 项的列表`);
+    if (field === 'scanPairs') values.forEach(pair);
+    else if (values.some(value => !/^[A-Z0-9]{2,15}$/.test(value))) throw Error('排除资产必须为 2–15 位大写字母或数字');
+  }
   decimal(next.amount, '默认金额');
   if (!Array.isArray(next.fallbackAmounts) || next.fallbackAmounts.length > 10) throw Error('备用金额格式错误');
   next.fallbackAmounts.forEach(x => { if (decimal(x, '备用金额').gt(next.amount)) throw Error('备用金额不得大于默认金额'); });
@@ -61,11 +69,17 @@ export class Engine {
     this.syncRisk();
   }
   start() { this.running = true; this.timer = setInterval(() => this.tick().catch(e => this.store.error('engine', e.message)), 250); this.timer.unref(); this.tick().catch(e => this.store.error('engine', e.message)); }
-  stop() { this.running = false; clearInterval(this.timer); this.store.state.config.autoTrading = false; this.store.save(); }
+  stop() { this.running = false; clearInterval(this.timer); this.store.state.config.autoTrading = false; this.stopScan('服务已停止', { disableAuto: false }); this.store.save(); }
   updateConfig(input, confirmation) {
     if (this.busy || this.store.state.config.autoTrading) throw Error('请先停止实盘并等待正在执行的批次完成后修改设置');
     const next = validateConfig(input, this.store.state.config, confirmation);
-    this.store.state.config = next; syncRisk(this.store.state); this.store.event('已更新设置'); return next;
+    const changed = JSON.stringify(next) !== JSON.stringify(this.store.state.config);
+    this.store.state.config = next;
+    if (changed) {
+      this.stopScan('设置已变化，请重新开始筛选', { disableAuto: false });
+      for (const result of Object.values(this.store.state.scanResults)) result.invalidated = true;
+    }
+    syncRisk(this.store.state); this.store.event('已更新设置'); return next;
   }
   syncRisk() {
     const state = this.store.state, before = JSON.stringify([state.riskState, state.config.autoTrading]);
@@ -112,6 +126,7 @@ export class Engine {
       if (confirm !== LIVE_CONFIRM) throw Error('开启实盘必须输入完整确认文字');
       const reasons = this.liveReasons(); if (reasons.length) throw Error(reasons.join('；'));
     }
+    if (enabled) this.stopScan('实盘开启，筛选已停止', { disableAuto: false });
     this.store.state.config.autoTrading = Boolean(enabled); this.store.event(enabled ? '实盘已开启：存在两腿不同时成交的风险' : '实盘已停止');
   }
   slotMs() {
@@ -321,23 +336,107 @@ export class Engine {
     syncRisk(this.store.state);
     this.store.event(`批次 ${id} 已人工核对；重新刷新余额后方可开启实盘`);
   }
-  async scanOne() {
+  scanProgress() {
+    const run = this.store.state.engine.scanRun;
+    if (!run) return null;
+    return Object.fromEntries(['id', 'mode', 'status', 'total', 'completed', 'failed', 'startedAt', 'endedAt', 'currentPair', 'reason', 'error'].map(key => [key, run[key] ?? null]));
+  }
+  scanActive(run = this.store.state.engine.scanRun) { return Boolean(run && ['PREPARING', 'RUNNING'].includes(run.status)); }
+  scanConfigKey() { return JSON.stringify(this.store.state.config); }
+  createScanRun(mode) {
     const state = this.store.state;
-    if (state.config.autoTrading) return;
-    const priority = this.scanRequested ? 4 : 5;
-    await Promise.all(state.config.exchanges.map(ex => this.exchanges.rules(ex, priority)));
-    const [a, b] = state.config.exchanges;
-    const ids = Object.keys(state.rules[a]).filter(id => id.endsWith('/' + state.config.scanQuote) && state.rules[a][id].enabled && state.rules[b]?.[id]?.enabled).sort();
-    if (!ids.length) throw Error('两所没有共同的可交易现货交易对');
-    const index = state.engine.scanCursor % ids.length, id = ids[index];
-    state.engine.scanCursor = (index + 1) % ids.length;
-    const books = Object.fromEntries(await Promise.all([a, b].map(async ex => [ex, await this.publicBook(ex, id, priority, { persist: state.config.pairs.includes(id) })])));
-    state.scanResults[id] = { at: Date.now(), directions: [a, b].map((buyExchange, i) => {
-      const sellExchange = [a, b][1 - i];
-      return this.previewDirection(id, buyExchange, sellExchange, books);
-    }) };
-    const entries = Object.entries(state.scanResults).sort((a, b) => b[1].at - a[1].at); state.scanResults = Object.fromEntries(entries.slice(0, 300));
-    if (index === ids.length - 1) this.scanRequested = false;
+    const run = { id: crypto.randomUUID(), mode, status: 'PREPARING', total: 0, completed: 0, failed: 0,
+      startedAt: Date.now(), endedAt: null, currentPair: null, ids: [], configKey: this.scanConfigKey() };
+    state.engine.scanRun = run; state.engine.scanCursor = 0; this.store.save(); return run;
+  }
+  requestScan() {
+    if (this.store.state.config.autoTrading || this.busy) throw Error('请先停止实盘并等待当前批次结束，再开始筛选');
+    this.scanRequested = true;
+    this.createScanRun('manual');
+    return this.scanProgress();
+  }
+  stopScan(reason = '已手动停止筛选', { disableAuto = true } = {}) {
+    const state = this.store.state, run = state.engine.scanRun;
+    this.scanRequested = false;
+    if (disableAuto) state.config.scannerAuto = false;
+    if (this.scanActive(run)) { run.status = 'STOPPED'; run.endedAt = Date.now(); run.currentPair = null; run.reason = reason; }
+    this.store.save(); return this.scanProgress();
+  }
+  currentScan(run) {
+    return this.store.state.engine.scanRun === run && this.scanActive(run) && !this.store.state.config.autoTrading && run.configKey === this.scanConfigKey();
+  }
+  scanCandidates() {
+    const state = this.store.state, [a, b] = state.config.exchanges;
+    const excluded = new Set(state.config.scanExcludeAssets || []), included = new Set(state.config.scanPairs || []);
+    return Object.keys(state.rules[a] || {}).filter(id => {
+      let base, quote;
+      try { ({ base, quote } = pair(id)); } catch { return false; }
+      return quote === state.config.scanQuote && !excluded.has(base) && (!included.size || included.has(id)) &&
+        state.rules[a][id].enabled && state.rules[b]?.[id]?.enabled;
+    }).sort();
+  }
+  finishScanPair(run, failed) {
+    run.completed++; if (failed) run.failed++;
+    run.currentPair = null;
+    this.store.state.engine.scanCursor = run.completed;
+    if (run.completed >= run.total) {
+      run.status = 'COMPLETED'; run.endedAt = Date.now();
+      this.scanRequested = false;
+    }
+    const entries = Object.entries(this.store.state.scanResults).sort(([, a], [, b]) => Math.max(b.at || 0, b.failedAt || 0) - Math.max(a.at || 0, a.failedAt || 0));
+    this.store.state.scanResults = Object.fromEntries(entries.slice(0, 300));
     this.store.save();
   }
-}
+  scanOne() {
+    if (this.scanTask) return this.scanTask;
+    const task = this.scanStep(); this.scanTask = task;
+    const clear = () => { if (this.scanTask === task) this.scanTask = null; };
+    task.then(clear, clear); return task;
+  }
+  async scanStep() {
+    const state = this.store.state;
+    if (state.config.autoTrading) { if (this.scanActive()) this.stopScan('实盘开启，筛选已停止', { disableAuto: false }); return; }
+    let run = state.engine.scanRun;
+    if (!this.scanActive(run)) run = this.createScanRun(this.scanRequested ? 'manual' : 'auto');
+    if (!this.currentScan(run)) return;
+    const priority = run.mode === 'manual' ? 4 : 5;
+    if (run.status === 'PREPARING') {
+      try {
+        const rules = await Promise.allSettled(state.config.exchanges.map(ex => this.exchanges.rules(ex, priority)));
+        if (!this.currentScan(run)) return;
+        const errors = rules.flatMap((result, index) => result.status === 'rejected' ? [`${state.config.exchanges[index]}：${result.reason.message}`] : []);
+        if (errors.length) throw Error(errors.join('；'));
+        run.ids = this.scanCandidates(); run.total = run.ids.length;
+        if (!run.total) throw Error('候选池中没有两所共同可交易的现货交易对');
+        run.status = 'RUNNING'; this.store.save();
+      } catch (error) {
+        if (this.currentScan(run)) {
+          run.status = 'FAILED'; run.error = error.message; run.endedAt = Date.now(); run.currentPair = null;
+          this.scanRequested = false; this.store.save();
+        }
+        throw error;
+      }
+    }
+    if (!this.currentScan(run)) return;
+    const id = run.ids[run.completed], [a, b] = state.config.exchanges;
+    run.currentPair = id; this.store.save();
+    // Delay cache writes until the current run is checked again. A stopped or
+    // superseded scan must not publish late results from its in-flight requests.
+    const results = await Promise.allSettled([a, b].map(ex => this.publicBook(ex, id, priority, { persist: false })));
+    if (!this.currentScan(run)) return;
+    try {
+      const errors = results.flatMap((result, index) => result.status === 'rejected' ? [`${[a, b][index]}：${result.reason.message}`] : []);
+      if (errors.length) throw Error(errors.join('；'));
+      const books = { [a]: results[0].value, [b]: results[1].value };
+      const directions = [a, b].map((buyExchange, i) => this.previewDirection(id, buyExchange, [a, b][1 - i], books));
+      if (state.config.pairs.includes(id)) for (const ex of [a, b]) (state.books[ex] ||= {})[id] = books[ex];
+      state.scanResults[id] = { at: Date.now(), directions, runId: run.id };
+      this.finishScanPair(run, false);
+    } catch (error) {
+      const previous = state.scanResults[id] ||= { at: null, directions: [] };
+      Object.assign(previous, { error: error.message, failedAt: Date.now(), runId: run.id });
+      run.error = error.message;
+      this.finishScanPair(run, true);
+      throw error;
+    }
+  }}

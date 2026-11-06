@@ -48,9 +48,15 @@ export function createApp({ dataDir = process.env.ARB_DATA_DIR || path.join(ROOT
         const state = store.state, now = Date.now();
         const books = Object.fromEntries(Object.entries(state.books).map(([ex, entries]) => [ex, Object.fromEntries(Object.entries(entries).filter(([id]) => state.config.pairs.includes(id)).map(([id, b]) => [id, { ...b, bids: b.bids.slice(0, 5), asks: b.asks.slice(0, 5), stale: now - b.at > state.config.maxBookAgeMs }]))]));
         const opportunities = Object.fromEntries(Object.entries(state.opportunities).map(([id, x]) => [id, { ...x, stale: !x.at || now - x.at > state.config.maxBookAgeMs }]));
+        const scanResults = Object.fromEntries(Object.entries(state.scanResults).map(([id, result]) => {
+          const failed = Boolean(result.error && result.failedAt >= (result.at || 0));
+          const samples = (result.directions || []).map(direction => direction.sampleAt).filter(Number.isFinite);
+          const sampledAt = samples.length ? Math.min(result.at || 0, ...samples) : result.at;
+          return [id, { ...result, failed, stale: Boolean(result.invalidated || failed || !sampledAt || now < sampledAt || now - sampledAt > state.config.maxBookAgeMs) }];
+        }));
         return json(res, 200, { now, config: state.config, keys: vault.publicKeys(), accounts: state.accounts, balances: state.balances,
-          books, opportunities, scanResults: state.scanResults, batches: state.batches.slice(0, 200), blocks: state.blocks,
-          engine: { ...state.engine, running: engine.running, busy: engine.busy, slotMs: engine.slotMs(), estimatedCycleMs: engine.slotMs() * state.config.pairs.length, scannerRunning: engine.scanRequested },
+          books, opportunities, scanResults, batches: state.batches.slice(0, 200), blocks: state.blocks,
+          engine: { ...state.engine, scanRun: engine.scanProgress(), running: engine.running, busy: engine.busy, slotMs: engine.slotMs(), estimatedCycleMs: engine.slotMs() * state.config.pairs.length, scannerRunning: engine.scanActive() || engine.scanRequested },
           rates: scheduler.snapshot(), errors: state.errors.slice(0, 60), events: state.events.slice(0, 60), liveReasons: engine.liveReasons(), docsVerified: engine.docsVerified, risk: engine.riskStatus(),
           balanceDirections: Object.fromEntries(state.config.pairs.map(id => [id, engine.balanceDirection(id)])) });
       }
@@ -85,7 +91,8 @@ export function createApp({ dataDir = process.env.ARB_DATA_DIR || path.join(ROOT
           key.enabled = data.enabled; store.save(); return json(res, 200, { ok: true });
         }
         if (url.pathname === '/api/balances/refresh') { if (engine.balanceBusy) throw Error('余额刷新已排队或执行中'); store.state.engine.lastBalanceAt = 0; return json(res, 202, { queued: true }); }
-        if (url.pathname === '/api/scan') { engine.scanRequested = true; return json(res, 202, { queued: true, note: '实盘时扫描暂停；每次仅筛选一个交易对' }); }
+        if (url.pathname === '/api/scan') return json(res, 202, { queued: true, scanRun: engine.requestScan(), note: '已从头开始完整候选池筛选，每次一个交易对；不会提交订单' });
+        if (url.pathname === '/api/scan/stop') return json(res, 200, { scanRun: engine.stopScan(), scannerAuto: store.state.config.scannerAuto });
         if (url.pathname === '/api/submit') {
           if (data.confirm !== '确认提交该批次') throw Error('手动提交必须确认');
           if (Object.keys(data).some(k => !['pair', 'buyExchange', 'mode', 'confirm'].includes(k))) throw Error('前端不得指定数量、价格或授权计算结果');
