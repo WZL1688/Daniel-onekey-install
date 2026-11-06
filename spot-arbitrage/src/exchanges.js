@@ -27,17 +27,35 @@ function okxAccount(data, expectedUid) {
   return { accountUid: uid, accountMode: account.acctLv, roleType: account.roleType, spotRoleType: account.spotRoleType };
 }
 export async function transport({ url, method, headers, body, mutation, dispatcher: requestDispatcher = dispatcher }) {
-  let response;
-  try { response = await fetch(url, { method, headers, body: body || undefined, dispatcher: requestDispatcher, signal: AbortSignal.timeout(10000), redirect: 'error' }); }
-  catch (e) { throw new ApiError(`网络请求失败 (${e.cause?.code || e.code || e.name})${mutation ? '；提交结果未知，禁止自动重发' : ''}`, { code: e.cause?.code || e.code || e.name, unknown: mutation }); }
+  const startedAt = Date.now(), signal = AbortSignal.timeout(10000), maxBytes = 15000000;
+  let response, size = 0;
+  // A response body can fail after HTTP 200 headers arrive. Keep those failures
+  // distinct from malformed JSON, and never expose a raw upstream error message.
+  const failure = (message, code, error) => {
+    const detail = String(error?.cause?.code ?? error?.code ?? error?.name ?? '');
+    const safeDetail = /^[A-Za-z0-9_-]{1,64}$/.test(detail) ? detail : '';
+    return new ApiError(`${message}（HTTP ${response?.status || 0}，已接收 ${size} 字节，耗时 ${Date.now() - startedAt} 毫秒，错误 ${code}${safeDetail && safeDetail !== code ? ' / ' + safeDetail : ''}）${mutation ? '；提交结果未知，禁止自动重发' : ''}`, {
+      status: response?.status || 0, code, retryAfter: response?.headers.get('retry-after') ?? null, unknown: Boolean(mutation),
+    });
+  };
+  const timedOut = () => signal.aborted && signal.reason?.name === 'TimeoutError';
+  try { response = await fetch(url, { method, headers, body: body || undefined, dispatcher: requestDispatcher, signal, redirect: 'error' }); }
+  catch (error) { throw failure(timedOut() ? '等待响应头超过 10000 毫秒' : '连接或响应头读取失败', timedOut() ? 'HEADERS_TIMEOUT' : 'REQUEST_FAILED', error); }
   const resultHeaders = Object.fromEntries(response.headers);
-  let data;
+  const chunks = [], tooLarge = Symbol('response-too-large');
   try {
-    const chunks = []; let size = 0;
-    for await (const chunk of response.body) { size += chunk.length; if (size > 15000000) throw Error('RESPONSE_TOO_LARGE'); chunks.push(Buffer.from(chunk)); }
-    data = parseExchangeJson(Buffer.concat(chunks).toString('utf8'));
+    for await (const chunk of response.body) {
+      size += chunk.length;
+      if (size > maxBytes) throw tooLarge;
+      chunks.push(Buffer.from(chunk));
+    }
+  } catch (error) {
+    if (error === tooLarge) throw failure(`响应体超过 ${maxBytes} 字节上限`, 'RESPONSE_TOO_LARGE');
+    throw failure(timedOut() ? '读取响应体超过请求总时限 10000 毫秒' : '响应体读取中断', timedOut() ? 'BODY_TIMEOUT' : 'BODY_READ_ERROR', error);
   }
-  catch { throw new ApiError(`HTTP ${response.status} 返回畸形或过大数据`, { status: response.status, retryAfter: response.headers.get('retry-after'), unknown: mutation }); }
+  let data;
+  try { data = parseExchangeJson(Buffer.concat(chunks).toString('utf8')); }
+  catch { throw failure('响应体不是有效 JSON', 'BAD_JSON'); }
   return { status: response.status, headers: resultHeaders, data };
 }
 export class Exchanges {
@@ -99,12 +117,17 @@ export class Exchanges {
     });
   }
   async syncClock(exchange, priority = 1) {
-    if (Date.now() - (this.store.state.exchangeMeta[exchange]?.clock?.at || 0) < 60000) return;
+    const cached = this.store.state.exchangeMeta[exchange]?.clock, age = Date.now() - cached?.at;
+    if (Number.isSafeInteger(cached?.at) && cached.at > 0 && Number.isFinite(cached.offset) && Math.abs(cached.offset) <= 30000 && age >= 0 && age < 60000) return;
     let start;
     const data = await this.request(exchange, { path: exchange === 'binance' ? '/api/v3/time' : '/api/v5/public/time', priority, onSend: () => { start = Date.now(); }, endpointCap: 4 });
     const end = Date.now(), serverTime = Number(exchange === 'binance' ? data.serverTime : data.data?.[0]?.ts);
-    if (!Number.isFinite(serverTime) || end - start > 2000) throw Error('时间同步往返延迟超过 2 秒或服务器时间无效');
-    (this.store.state.exchangeMeta[exchange] ||= {}).clock = { at: end, offset: serverTime - (start + end) / 2, rtt: end - start };
+    const rtt = end - start;
+    if (!Number.isFinite(rtt) || rtt < 0 || rtt > 2000 || !Number.isSafeInteger(serverTime) || serverTime <= 0) throw Error('时间同步往返延迟无效（要求 0 至 2000 毫秒）或服务器时间无效');
+    const offset = serverTime - (start + end) / 2;
+    if (!Number.isFinite(offset)) throw Error('时间同步偏差计算无效，请同步系统时钟');
+    if (Math.abs(offset) > 30000) throw Error(`本机与交易所时间偏差 ${offset.toFixed(1)} 毫秒（允许正负 30000 毫秒），请同步系统时钟`);
+    (this.store.state.exchangeMeta[exchange] ||= {}).clock = { at: end, offset, rtt };
     this.store.save();
   }
   async rules(exchange, priority = 1, force = false) {
@@ -150,9 +173,10 @@ export class Exchanges {
     if (exchange === 'okx') {
       if (!/^\d+$/.test(String(x.ts ?? '')) || !Number.isSafeInteger(exchangeAt) || exchangeAt <= 0) throw Error('OKX 盘口时间缺失或无效');
       const clock = this.store.state.exchangeMeta.okx?.clock;
-      const offset = clock && Number.isFinite(clock.offset) && Math.abs(clock.offset) <= 30000 && at - clock.at >= 0 && at - clock.at < 300000 ? clock.offset : 0;
+      const calibrated = Boolean(clock && Number.isFinite(clock.offset) && Math.abs(clock.offset) <= 30000 && at - clock.at >= 0 && at - clock.at < 300000);
+      const offset = calibrated ? clock.offset : 0;
       const age = at + offset - exchangeAt;
-      if (age < -1000 || age > this.store.state.config.maxBookAgeMs) throw Error('交易所盘口时间已过期或处于未来');
+      if (age < -1000 || age > this.store.state.config.maxBookAgeMs) throw Error(`OKX 交易所盘口时间已过期或处于未来（实际时差 ${age.toFixed(1)} 毫秒，允许 -1000 至 ${this.store.state.config.maxBookAgeMs} 毫秒，时钟${calibrated ? '已校准' : '未校准'}）`);
     }
     const normalized = normalizeBook({ pair: id, bids: x.bids, asks: x.asks, at, exchangeAt, depthLimit: exchange === 'binance' ? 100 : 400 }, id);
     if (persist) { (this.store.state.books[exchange] ||= {})[id] = normalized; this.store.save(); } return normalized;

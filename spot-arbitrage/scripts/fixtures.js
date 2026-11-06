@@ -7,6 +7,7 @@ export function marketFixture(request) {
     symbols: symbols.map(asset => ({ symbol: asset + 'USDT', baseAsset: asset, quoteAsset: 'USDT', status: 'TRADING', isSpotTradingAllowed: true, orderTypes: ['LIMIT'],
       filters: [{ filterType: 'LOT_SIZE', minQty: '0.0001', maxQty: '100000', stepSize: '0.0001' }, { filterType: 'PRICE_FILTER', minPrice: '0.01', maxPrice: '10000000', tickSize: '0.01' }, { filterType: 'MIN_NOTIONAL', minNotional: '5' }] })),
   };
+  else if (url.pathname === '/api/v5/public/time') data = { code: '0', data: [{ ts: String(Date.now()) }] };
   else if (url.pathname === '/api/v5/public/instruments') data = { code: '0', data: symbols.map(asset => ({ instType: 'SPOT', instId: asset + '-USDT', baseCcy: asset, quoteCcy: 'USDT', state: 'live', lotSz: '0.0001', tickSz: '0.01', minSz: '0.0001', maxLmtSz: '100000' })) };
   else if (url.pathname === '/api/v3/depth' || url.pathname === '/api/v5/market/books') {
     const id = url.searchParams.get('symbol') || url.searchParams.get('instId');

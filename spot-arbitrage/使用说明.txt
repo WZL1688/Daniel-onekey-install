@@ -6,9 +6,12 @@ Windows：
 1. 从 https://nodejs.org/ 安装当前 Windows LTS 版，保留默认 npm/PATH 选项。
 2. 将本 ZIP 全部解压到自己的用户文件夹，不要在压缩包内运行。
 3. 双击 1-install-windows.cmd，出现 Installation finished 后关闭。
-4. 双击 2-start-windows.cmd，保持窗口开启。
-5. 等窗口显示工具已启动，在浏览器打开 http://127.0.0.1:8888 。
+4. 普通启动双击 2-start-windows.cmd；本机 HTTP 代理为 127.0.0.1:7897 时，双击 4-start-proxy-7897-windows.cmd。保持窗口开启。
+5. 等窗口显示工具已启动，在浏览器打开 http://localhost:8888/ 。
 6. 使用完成按 Ctrl+C 正常停止。不要同时开两份。
+
+行情连接失败时，先正常停止服务，再双击 3-diagnose-windows.cmd，按回车检查本机 7897 HTTP 代理。诊断只请求公开接口，不使用 Key、不下单，也不会修改服务的代理设置。
+更新前正常停服并完整备份 data；新版解压到单独目录、安装后复制完整 data，禁止同时运行新旧两份。
 
 不需要 Ubuntu，不要求管理员权限。原生 Windows 尚无完整实机验收，详见 docs/WINDOWS.md。
 
@@ -17,4 +20,4 @@ Windows：
 本版本不能承诺直接用真金白银自动套利。不要自行改验证标志绕过限制。
 
 Key 仅在自己的本机界面输入，禁止发到聊天。不要共享 data 文件夹或 master.key。
-请阅读 README.md 和 docs/RELEASE_REVIEW.md，了解本次修复、测试结果和剩余限制。
+请阅读 README.md、docs/NETWORK_FIX_20261106.md 和 docs/RELEASE_REVIEW.md，了解本次修复、测试结果和剩余限制。

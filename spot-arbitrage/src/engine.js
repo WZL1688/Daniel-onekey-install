@@ -140,10 +140,16 @@ export class Engine {
       this.lastScanAt = now; this.scanBusy = true; this.scanOne().catch(e => this.store.error('scanner', e.message)).finally(() => { this.scanBusy = false; });
     }
   }
+  async publicBook(exchange, id, priority = 1, options) {
+    // OKX timestamps are checked against a public server clock even before any
+    // query key is configured. syncClock itself queues and caches that request.
+    if (exchange === 'okx') await this.exchanges.syncClock(exchange, priority);
+    return this.exchanges.book(exchange, id, priority, options);
+  }
   async poll(id) {
     const state = this.store.state, exchanges = state.config.exchanges;
-    const results = await Promise.allSettled(exchanges.map(async ex => { await this.exchanges.rules(ex); return this.exchanges.book(ex, id); }));
-    const errors = results.filter(r => r.status === 'rejected').map(r => r.reason.message);
+    const results = await Promise.allSettled(exchanges.map(async ex => { await this.exchanges.rules(ex); return this.publicBook(ex, id); }));
+    const errors = results.flatMap((r, index) => r.status === 'rejected' ? [`${exchanges[index]}：${r.reason.message}`] : []);
     if (errors.length) {
       const old = state.opportunities[id] ||= { pair: id, directions: [] }; old.error = errors.join('；'); old.failedAt = Date.now(); this.store.save(); return;
     }
@@ -325,7 +331,7 @@ export class Engine {
     if (!ids.length) throw Error('两所没有共同的可交易现货交易对');
     const index = state.engine.scanCursor % ids.length, id = ids[index];
     state.engine.scanCursor = (index + 1) % ids.length;
-    const books = Object.fromEntries(await Promise.all([a, b].map(async ex => [ex, await this.exchanges.book(ex, id, priority, { persist: state.config.pairs.includes(id) })])));
+    const books = Object.fromEntries(await Promise.all([a, b].map(async ex => [ex, await this.publicBook(ex, id, priority, { persist: state.config.pairs.includes(id) })])));
     state.scanResults[id] = { at: Date.now(), directions: [a, b].map((buyExchange, i) => {
       const sellExchange = [a, b][1 - i];
       return this.previewDirection(id, buyExchange, sellExchange, books);

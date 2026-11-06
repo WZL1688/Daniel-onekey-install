@@ -30,6 +30,7 @@ export function readyEngine(t, options = {}) {
   const exchange = {
     chooseTrade: ex => s.keys.find(k => k.exchange === ex && k.role === 'trade'),
     rules: async (ex, priority, force) => { calls.push(['rules', ex, priority, force]); },
+    syncClock: async (ex, priority) => { calls.push(['syncClock', ex, priority]); },
     balances: async (ex, priority) => { calls.push(['balances', ex, priority]); s.balances[ex].at = Date.now(); return s.balances[ex]; },
     book: async (ex, id, priority) => { calls.push(['book', ex, priority]); s.books[ex][id].at = Date.now(); return s.books[ex][id]; },
     order: async (ex, order) => { calls.push(['order', ex, order]); return { orderId: String(calls.length), clientId: order.clientId, status: 'ACKNOWLEDGED' }; },
