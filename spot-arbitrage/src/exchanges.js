@@ -18,6 +18,14 @@ function validateAssetFilters(filters, id) {
     return { filterType: 'MAX_ASSET', asset: filter.asset, limit: decimal(filter.limit, 'MAX_ASSET 限额', { zero: true }).toString() };
   });
 }
+function okxAccount(data, expectedUid) {
+  if (!Array.isArray(data?.data) || data.data.length !== 1) throw Error('OKX 账户配置响应错误');
+  const account = data.data[0], uid = String(account?.uid ?? '');
+  if (!/^\d+$/.test(uid) || (expectedUid && uid !== expectedUid)) throw Error('OKX 账户 UID 缺失或不匹配');
+  if (!['1', '2'].includes(account.acctLv)) throw Error('OKX 仅支持现货模式或合约模式下的 cash 现货账户；当前账户模式不受支持');
+  if (account.roleType !== '0' || account.spotRoleType !== '0') throw Error('OKX 带单、跟单或未知账户角色不受支持');
+  return { accountUid: uid, accountMode: account.acctLv, roleType: account.roleType, spotRoleType: account.spotRoleType };
+}
 export async function transport({ url, method, headers, body, mutation, dispatcher: requestDispatcher = dispatcher }) {
   let response;
   try { response = await fetch(url, { method, headers, body: body || undefined, dispatcher: requestDispatcher, signal: AbortSignal.timeout(10000), redirect: 'error' }); }
@@ -33,7 +41,7 @@ export async function transport({ url, method, headers, body, mutation, dispatch
   return { status: response.status, headers: resultHeaders, data };
 }
 export class Exchanges {
-  constructor(store, vault, scheduler, request = transport) { this.store = store; this.vault = vault; this.scheduler = scheduler; this.transport = request; this.rotations = {}; }
+  constructor(store, vault, scheduler, request = transport) { this.store = store; this.vault = vault; this.scheduler = scheduler; this.transport = request; this.rotations = {}; this.okxContexts = new Map(); }
   chooseQuery(exchange, explicitId, allowUnverified = false) {
     const keys = this.store.state.keys.filter(k => k.exchange === exchange && k.role === 'query' && k.enabled &&
       (explicitId ? k.id === explicitId : allowUnverified || k.status === 'VERIFIED'));
@@ -101,7 +109,8 @@ export class Exchanges {
   }
   async rules(exchange, priority = 1, force = false) {
     const old = this.store.state.exchangeMeta[exchange];
-    if (!force && old?.rulesAt && Date.now() - old.rulesAt < 3600000) return;
+    if (!force && old?.rulesAt && Date.now() - old.rulesAt < 3600000 &&
+      (exchange !== 'okx' || Object.values(this.store.state.rules.okx || {}).every(rule => Object.hasOwn(rule, 'maxUsdNotional')))) return;
     const data = await this.request(exchange, { path: exchange === 'binance' ? '/api/v3/exchangeInfo' : '/api/v5/public/instruments',
       params: exchange === 'binance' ? {} : { instType: 'SPOT' }, priority, weight: exchange === 'binance' ? 20 : 1, dedupe: exchange + ':rules', endpointCap: 4 });
     const rules = {};
@@ -123,7 +132,8 @@ export class Exchanges {
       if (!Array.isArray(data.data) || data.data.length === 0) throw Error('OKX 交易规则响应错误');
       for (const x of data.data) if (x.instType === 'SPOT' && x.baseCcy && x.quoteCcy && x.instId === x.baseCcy + '-' + x.quoteCcy) rules[`${x.baseCcy}/${x.quoteCcy}`] = {
         symbol: x.instId, enabled: x.state === 'live', step: x.lotSz, tick: x.tickSz, minQty: x.minSz,
-        maxQty: x.maxLmtSz || null, minNotional: '0', maxNotional: x.maxLmtAmt || null, at: Date.now(),
+        // OKX maxLmtAmt is denominated in USD, never the pair's quote asset.
+        maxQty: x.maxLmtSz || null, minNotional: '0', maxNotional: null, maxUsdNotional: x.maxLmtAmt || null, at: Date.now(),
       };
     }
     this.store.state.rules[exchange] = rules; (this.store.state.exchangeMeta[exchange] ||= {}).rulesAt = Date.now(); this.store.save();
@@ -135,9 +145,16 @@ export class Exchanges {
       params: exchange === 'binance' ? { symbol: rule.symbol, limit: '100' } : { instId: rule.symbol, sz: '400' },
       priority, weight: exchange === 'binance' ? 5 : 1, endpointCap: 8, dedupe: `${exchange}:book:${id}` });
     const x = exchange === 'binance' ? data : data.data?.[0];
-    if (!x || (x.instId && x.instId !== rule.symbol) || (exchange === 'binance' && !Number.isSafeInteger(x.lastUpdateId))) throw Error('盘口标识错误');
-    const normalized = normalizeBook({ pair: id, bids: x.bids, asks: x.asks, at: Date.now(), exchangeAt: x.ts ? Number(x.ts) : null, depthLimit: exchange === 'binance' ? 100 : 400 }, id);
-    if (normalized.exchangeAt && Date.now() - normalized.exchangeAt > this.store.state.config.maxBookAgeMs) throw Error('交易所盘口时间已过期');
+    if (!x || (exchange === 'okx' && (!Array.isArray(data.data) || data.data.length !== 1)) || (x.instId && x.instId !== rule.symbol) || (exchange === 'binance' && !Number.isSafeInteger(x.lastUpdateId))) throw Error('盘口标识错误');
+    const at = Date.now(), exchangeAt = exchange === 'okx' ? Number(x.ts) : null;
+    if (exchange === 'okx') {
+      if (!/^\d+$/.test(String(x.ts ?? '')) || !Number.isSafeInteger(exchangeAt) || exchangeAt <= 0) throw Error('OKX 盘口时间缺失或无效');
+      const clock = this.store.state.exchangeMeta.okx?.clock;
+      const offset = clock && Number.isFinite(clock.offset) && Math.abs(clock.offset) <= 30000 && at - clock.at >= 0 && at - clock.at < 300000 ? clock.offset : 0;
+      const age = at + offset - exchangeAt;
+      if (age < -1000 || age > this.store.state.config.maxBookAgeMs) throw Error('交易所盘口时间已过期或处于未来');
+    }
+    const normalized = normalizeBook({ pair: id, bids: x.bids, asks: x.asks, at, exchangeAt, depthLimit: exchange === 'binance' ? 100 : 400 }, id);
     if (persist) { (this.store.state.books[exchange] ||= {})[id] = normalized; this.store.save(); } return normalized;
   }
   async validateKey(id) {
@@ -149,6 +166,7 @@ export class Exchanges {
         key, priority: 3, weight: key.exchange === 'binance' ? 20 : 1 });
       const uid = String(key.exchange === 'binance' ? data.uid ?? '' : data.data?.[0]?.uid ?? '');
       if (!/^\d+$/.test(uid)) throw Error('交易所未返回账户 UID，无法验证同账户');
+      if (key.exchange === 'okx') okxAccount(data);
       const old = this.store.state.accounts[key.exchange];
       if (old && old !== uid) throw Error('查询 Key 属于不同账户，已隔离，不能轮换');
       key.accountUid = uid; key.status = 'VERIFIED'; delete key.lastError;
@@ -163,14 +181,20 @@ export class Exchanges {
       const data = await this.request(exchange, { path: exchange === 'binance' ? '/api/v3/account' : '/api/v5/account/balance', key, priority, weight: exchange === 'binance' ? 20 : 1 });
       if (exchange === 'binance' && String(data.uid) !== key.accountUid) throw Error('查询返回账户 UID 已变化');
       const assets = {};
+      if (exchange === 'okx' && (!Array.isArray(data.data) || data.data.length !== 1)) throw Error('OKX 余额响应账户数量错误');
       const rows = exchange === 'binance' ? data.balances : data.data?.[0]?.details;
       if (!Array.isArray(rows)) throw Error('余额响应格式错误');
       for (const x of rows) {
         const ccy = exchange === 'binance' ? x.asset : x.ccy;
         if (!/^[A-Z0-9]{1,20}$/.test(ccy)) continue;
-        const free = decimal(exchange === 'binance' ? x.free : x.availBal || '0', '可用余额', { zero: true });
-        const locked = decimal(exchange === 'binance' ? x.locked : x.frozenBal || '0', '冻结余额', { zero: true });
-        assets[ccy] = { free: free.toString(), locked: locked.toString(), total: free.plus(locked).toString() };
+        if (assets[ccy]) throw Error('余额响应包含重复资产');
+        const free = decimal(exchange === 'binance' ? x.free : x.availBal, '可用余额', { zero: true });
+        const locked = decimal(exchange === 'binance' ? x.locked : x.frozenBal, '冻结余额', { zero: true });
+        // frozenBal may overlap strategy/position balances. cashBal is cash
+        // inventory; adding availBal and frozenBal can inflate capital quotas.
+        const total = exchange === 'binance' ? free.plus(locked) : decimal(x.cashBal, '现金余额', { zero: true });
+        if (free.gt(total)) throw Error('可用余额超过现金库存，当前账户余额不受支持');
+        assets[ccy] = { free: free.toString(), locked: locked.toString(), total: total.toString() };
       }
       this.store.state.balances[exchange] = { assets, at: Date.now(), valid: true, accountUid: key.accountUid };
       this.store.save(); return this.store.state.balances[exchange];
@@ -185,16 +209,23 @@ export class Exchanges {
     const key = this.chooseTrade(exchange), rule = this.store.state.rules[exchange]?.[id];
     if (!rule?.enabled || !['BUY', 'SELL'].includes(side) || !/^[a-zA-Z0-9]{1,32}$/.test(clientId)) throw Error('订单参数错误');
     validateOrder(rule, qty, price);
+    const context = exchange === 'okx' ? this.okxContexts.get(id) : null;
+    if (exchange === 'okx') {
+      try { this.assertPriceContext(exchange, id, side, qty, price, context); }
+      catch (error) { throw new ApiError(error.message, { code: 'PRE_SUBMIT_GUARD', unknown: false }); }
+    }
     const data = await this.request(exchange, exchange === 'binance' ? {
       path: '/api/v3/order', method: 'POST', key, mutation: true, priority: 0, beforeSend: guard,
       params: { symbol: rule.symbol, side, type: 'LIMIT', timeInForce: 'IOC', quantity: qty, price, newClientOrderId: clientId, newOrderRespType: 'ACK' },
-    } : { path: '/api/v5/trade/order', method: 'POST', key, mutation: true, priority: 0, beforeSend: guard,
-      body: { instId: rule.symbol, tdMode: 'cash', side: side.toLowerCase(), ordType: 'ioc', sz: qty, px: price, clOrdId: clientId },
+    } : { path: '/api/v5/trade/order', method: 'POST', key, mutation: true, priority: 0,
+      beforeSend: () => { guard(); this.assertPriceContext(exchange, id, side, qty, price, context); },
+      body: { instId: rule.symbol, tdMode: 'cash', side: side.toLowerCase(), ordType: 'ioc', sz: qty, px: price, clOrdId: clientId, pxAmendType: '0', tradeQuoteCcy: context.tradeQuoteCcy },
     });
     const item = exchange === 'binance' ? data : data.data?.[0];
     if (exchange === 'okx' && item?.sCode !== '0') throw new ApiError(`OKX 下单未确认 (${item?.sCode || 'BAD_ACK'})`, { code: item?.sCode, unknown: true });
     const orderId = String(exchange === 'binance' ? item?.orderId ?? '' : item?.ordId ?? '');
     if (!/^\d+$/.test(orderId)) throw new ApiError('下单响应没有有效订单号；提交结果未知', { unknown: true });
+    if (exchange === 'binance' ? item.symbol !== rule.symbol || item.clientOrderId !== clientId : !Array.isArray(data.data) || data.data.length !== 1 || item.clOrdId !== clientId) throw new ApiError('下单响应订单身份不匹配；提交结果未知', { unknown: true });
     key.status = 'WORKING_NOT_QUERIED'; this.store.save();
     return { orderId, status: 'ACKNOWLEDGED', clientId };
   }
@@ -232,10 +263,22 @@ export class Exchanges {
     if (rows.length) throw Error(`${exchange} ${id} 有 ${rows.length} 笔开放订单，禁止新批次`);
   }
   async priceContext(exchange, id) {
-    if (exchange !== 'binance') return null;
     const rule = this.store.state.rules[exchange]?.[id];
     if (!rule?.symbol) throw Error(`${exchange} ${id} 无有效现货规则`);
     const key = this.chooseQuery(exchange);
+    if (exchange === 'okx') {
+      this.okxContexts.delete(id);
+      if (key.accountUid !== this.store.state.accounts.okx) throw Error('查询 Key 账户不匹配');
+      const account = okxAccount(await this.request(exchange, { path: '/api/v5/account/config', key, priority: 0 }), key.accountUid), accountAt = Date.now();
+      const data = await this.request(exchange, { path: '/api/v5/account/instruments', params: { instType: 'SPOT', instId: rule.symbol }, key, priority: 0 });
+      if (!Array.isArray(data.data) || data.data.length !== 1) throw Error('OKX 账户交易对规则响应错误');
+      const instrument = data.data[0], { base, quote } = pair(id);
+      if (!instrument || instrument.instId !== rule.symbol || instrument.instType !== 'SPOT' || instrument.baseCcy !== base || instrument.quoteCcy !== quote || instrument.state !== 'live') throw Error('OKX 账户交易对不匹配或不可交易');
+      const quotes = instrument.tradeQuoteCcyList;
+      if (!Array.isArray(quotes) || !quotes.length || !quotes.every(value => typeof value === 'string' && /^[A-Z0-9]{1,20}$/.test(value)) || !quotes.includes(quote)) throw Error('OKX 账户不支持当前报价资产；禁止隐式更换 tradeQuoteCcy');
+      const context = { ...account, pair: id, symbol: rule.symbol, tradeQuoteCcy: quote, tradeQuoteCcyList: [...quotes], maxUsdNotional: instrument.maxLmtAmt, at: accountAt };
+      this.okxContexts.set(id, context); return context;
+    }
     if (key.accountUid !== this.store.state.accounts.binance) throw Error('查询 Key 账户不匹配');
     // exchangeInfo does not expose account MAX_ASSET. Query it for every
     // preflight, even when this symbol has no percentage-price filter.
@@ -253,7 +296,18 @@ export class Exchanges {
   assertPriceContext(exchange, id, side, qty, price, context) {
     const rule = this.store.state.rules[exchange]?.[id]; validateOrder(rule, qty, price);
     if (!['BUY', 'SELL'].includes(side)) throw Error('订单方向错误');
-    if (exchange !== 'binance') return;
+    if (exchange === 'okx') {
+      const age = Date.now() - context?.at, { quote } = pair(id);
+      if (!context || context.pair !== id || context.symbol !== rule.symbol || context.accountUid !== this.store.state.accounts.okx ||
+        !['1', '2'].includes(context.accountMode) || context.roleType !== '0' || context.spotRoleType !== '0' ||
+        !Number.isFinite(context.at) || age < -1000 || age > 10000 || context.tradeQuoteCcy !== quote || !Array.isArray(context.tradeQuoteCcyList) || !context.tradeQuoteCcyList.includes(quote)) throw Error('OKX 账户及报价资产复核上下文缺失、不匹配或过期');
+      // No USD=stablecoin assumption: a USD cap cannot be checked against a
+      // USDT/USDC/BTC notional without a verified USD conversion source.
+      if (quote !== 'USD') throw Error('OKX maxLmtAmt 为美元限额；当前报价资产缺少经核验的美元换算，禁止实盘提交');
+      const amount = D(qty).mul(price);
+      for (const value of [rule.maxUsdNotional, context.maxUsdNotional]) if (amount.gt(decimal(value, 'OKX 美元单笔限额'))) throw Error('订单超过 OKX 美元单笔限额');
+      return;
+    }
     const age = Date.now() - context?.assetFiltersAt;
     if (!context || context.pair !== id || !context.accountUid || context.accountUid !== this.store.state.accounts.binance ||
       !Number.isFinite(context.assetFiltersAt) || age < -1000 || age > 10000) throw Error('账户资产过滤器复核上下文缺失、不匹配或过期');
@@ -280,9 +334,11 @@ export class Exchanges {
   async cancel(exchange, id, orderId) {
     if (!/^\d+$/.test(String(orderId))) throw Error('订单号错误');
     const key = this.chooseTrade(exchange), symbol = this.store.state.rules[exchange]?.[id]?.symbol;
+    if (!symbol) throw Error('撤单交易对规则缺失');
     const data = await this.request(exchange, exchange === 'binance' ? { path: '/api/v3/order', method: 'DELETE', params: { symbol, orderId }, key, mutation: true, priority: 0 } :
       { path: '/api/v5/trade/cancel-order', method: 'POST', body: { instId: symbol, ordId: orderId }, key, mutation: true, priority: 0 });
     if (exchange === 'okx' && data.data?.[0]?.sCode !== '0') throw new ApiError('OKX 撤单未确认', { unknown: true });
+    if (exchange === 'binance' ? data?.symbol !== symbol || String(data.orderId) !== String(orderId) : !Array.isArray(data.data) || data.data.length !== 1 || String(data.data[0].ordId) !== String(orderId)) throw new ApiError('撤单响应订单身份不匹配；撤单结果未知', { unknown: true });
     return { status: 'CANCEL_ACKNOWLEDGED' }; // A cancel acknowledgment does not prove no fill.
   }
 }

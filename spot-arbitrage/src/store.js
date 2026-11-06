@@ -1,13 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { syncDirectory } from './platform.js';
+import { acquireProcessLock } from './process-lock.js';
+import { enhancementDefaults, initializeEnhancements } from './policies.js';
 export const defaults = () => ({
   version: 1,
   config: { exchanges: ['binance', 'okx'], pairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'], amount: '100', fallbackAmounts: ['50', '20'],
     fees: { binance: '0.001', okx: '0.001' }, feeConfirmed: false, buffer: '0.05', minProfit: '0.2', minDepthProfit: '0.2',
     maxBookAgeMs: 5000, maxBalanceAgeMs: 15000, slotMs: 3000, balanceRefreshMs: 60000,
     budgets: { binance: 600, okx: 120 }, autoTrading: false, unknownAction: 'pause', scannerAuto: false, scanQuote: 'USDT',
-    balance: {} },
+    balance: {}, ...enhancementDefaults() },
   keys: [], accounts: {}, balances: {}, books: {}, rules: {}, exchangeMeta: {}, opportunities: {}, scanResults: {},
   batches: [], blocks: {}, cooldowns: {}, rates: {}, errors: [], events: [],
   engine: { cursor: 0, lastPollAt: 0, lastCycleAt: 0, cycleMs: null, polls: 0, lastBalanceAt: 0, scanCursor: 0 },
@@ -17,27 +20,31 @@ export class Store {
     this.dir = path.resolve(dir); fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     fs.chmodSync(this.dir, 0o700); this.file = path.join(this.dir, 'state.json');
     this.lockFile = path.join(this.dir, 'process.lock');
-    try { this.lockFd = fs.openSync(this.lockFile, 'wx', 0o600); }
-    catch (e) {
-      if (e.code !== 'EEXIST') throw e;
-      const pid = Number(fs.readFileSync(this.lockFile, 'utf8'));
-      if (!Number.isInteger(pid) || pid <= 0) throw Error('数据目录锁损坏，拒绝启动');
-      try { process.kill(pid, 0); throw Error('数据目录已被另一进程使用'); }
-      catch (err) { if (err.code !== 'ESRCH') throw err; }
-      fs.unlinkSync(this.lockFile); this.lockFd = fs.openSync(this.lockFile, 'wx', 0o600);
-    }
-    fs.writeFileSync(this.lockFd, String(process.pid)); fs.fsyncSync(this.lockFd);
+    this.processLock = acquireProcessLock(this.dir);
+    this.lockFd = this.processLock.fd;
     try {
       this.state = fs.existsSync(this.file) ? JSON.parse(fs.readFileSync(this.file, 'utf8')) : defaults();
       if (this.state.version !== 1 || !Array.isArray(this.state.batches) || !this.state.config || !this.state.rates) throw Error('不支持或损坏的数据文件');
+      const fallback = defaults();
+      this.state = { ...fallback, ...this.state, config: { ...fallback.config, ...this.state.config } };
       this.state.config.autoTrading = false;
+      initializeEnhancements(this.state);
       for (const batch of this.state.batches) {
         for (const leg of batch.legs || []) if (leg.status === 'SENDING') { leg.status = 'UNKNOWN'; batch.status = 'UNKNOWN'; }
         for (const leg of batch.legs || []) if (leg.cancelStatus === 'SENDING') leg.cancelStatus = 'UNKNOWN';
         if (!['RESOLVED', 'REJECTED'].includes(batch.status)) this.state.blocks[batch.pair] = `未核对批次 ${batch.id} (${batch.status})`;
       }
       this.save();
-    } catch (e) { this.close(); throw e; }
+    } catch (e) {
+      try { this.close(); }
+      catch (closeError) {
+        const errors = [e, closeError];
+        try { this.processLock.abandon(); } catch (abandonError) { errors.push(abandonError); }
+        this.lockFd = null;
+        throw new AggregateError(errors, `${e.message}；存储锁清理失败，请人工检查数据目录锁`);
+      }
+      throw e;
+    }
   }
   save() {
     if (this.lockFd == null) throw Error('存储已关闭，拒绝写入');
@@ -45,11 +52,15 @@ export class Store {
     const fd = fs.openSync(temp, 'wx', 0o600);
     try { fs.writeFileSync(fd, JSON.stringify(this.state)); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
     fs.renameSync(temp, this.file);
-    const directory = fs.openSync(this.dir, 'r'); try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
+    syncDirectory(this.dir);
   }
   event(message, type = 'info') { this.state.events.unshift({ at: Date.now(), type, message }); this.state.events.length = Math.min(300, this.state.events.length); this.save(); }
   error(scope, message) { this.state.errors.unshift({ at: Date.now(), scope, message }); this.state.errors.length = Math.min(200, this.state.errors.length); this.save(); }
-  close() { if (this.lockFd != null) { fs.closeSync(this.lockFd); this.lockFd = null; try { fs.unlinkSync(this.lockFile); } catch (e) { if (e.code !== 'ENOENT') throw e; } } }
+  close() {
+    if (this.lockFd == null) return;
+    try { return this.processLock.close(); }
+    finally { if (this.processLock.closed) this.lockFd = null; }
+  }
 }
 export class Vault {
   constructor(store) {

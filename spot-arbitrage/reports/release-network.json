@@ -1,0 +1,18 @@
+{
+  "checkedAtShanghai": "2026-11-06T10:28:15+08:00",
+  "binancePublicTime": {
+    "httpStatus": 451,
+    "result": "exchange region restriction; do not bypass"
+  },
+  "okxPublicTime": {
+    "httpStatus": 200,
+    "result": "official code0"
+  },
+  "okxPublicInstrument": {
+    "httpStatus": 200,
+    "symbol": "BTC-USDT",
+    "maxLmtAmtUSD": "20000000"
+  },
+  "privateApiTested": false,
+  "realOrdersSent": 0
+}

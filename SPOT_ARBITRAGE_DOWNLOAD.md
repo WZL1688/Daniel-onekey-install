@@ -1,29 +1,30 @@
-# 现货套利工具下载
+# 更新版下载：本地功能验证版
 
-本分支提供已更新的 Binance / OKX 双交易所现货套利工具源码和 ZIP。未合并到 main，原有四份节点安装脚本未改动。
+**可安装启动本地界面和四项功能；真实账户与实盘尚未验收，不能直接作为实盘套利机器人。** 本分支不合并到 main。
 
-## 下载
+- [直接下载最新 ZIP](https://github.com/WZL1688/Daniel-onekey-install/raw/refs/heads/spot-arbitrage-delivery-20261103/downloads/spot-arbitrage-updated.zip)
+- [GitHub 文件页](downloads/spot-arbitrage-updated.zip)：未自动下载时点击 Download raw file。
+- ZIP SHA256：`ff7106c385f103b2cacb6e639204fe2c621242ef155c49f350b5a1a8a7e96877`
 
-- [下载独立 ZIP](https://github.com/WZL1688/Daniel-onekey-install/raw/refs/heads/spot-arbitrage-delivery-20261103/downloads/spot-arbitrage-updated.zip)
-- 若直接下载没有开始，打开本分支的 downloads/spot-arbitrage-updated.zip 文件页，使用 Download raw file。
-- 源码目录：spot-arbitrage/。若下载整个 GitHub 分支 ZIP，请进入其中的 spot-arbitrage 文件夹。
+## Windows 怎么打开
 
-ZIP SHA256：`91db7bd43c7eb192434957a3fc9147594d45a5a9def12268504e149ffd724cae`
+1. 从 https://nodejs.org/ 安装 Windows LTS（要求 Node.js >=20.18）。
+2. ZIP全部解压，双击 **1-install-windows.cmd** 安装依赖。
+3. 安装完成后双击 **2-start-windows.cmd**，保持窗口打开。
+4. 出现启动提示后，在浏览器打开 **http://127.0.0.1:8888**。
 
-## 安装
+不需要Ubuntu，不要双击package.json。详见 [Windows说明](spot-arbitrage/docs/WINDOWS.md)。原生Windows完整实机验收尚未进行；兼容分支和启动逻辑已测试。
 
-需要 Node.js >=20.18，支持 Linux、macOS 或 WSL2。解压独立 ZIP，进入 spot-arbitrage 文件夹：
+## 本次检查
 
-```bash
-npm ci
-npm test
-npm start
-```
+- 四项增强：成本比较、流动性、资金配额、持久化亏损熔断。
+- 修复崩溃后并发启动取得同一进程锁的风险，保留未知订单保护。
+- 完整自动化测试265/265通过，依赖审计0个已知漏洞。
+- Linux默认8888启动及HTTP访问通过；独立本地夹具连续65秒通过。
+- 不含data、.env、主密钥、真实凭据或node_modules。
 
-默认只监听本机端口8888，实盘默认关闭。详细说明见 [README](spot-arbitrage/README.md)、[需求对照](spot-arbitrage/docs/REQUIREMENTS.md)及[实际验收报告](spot-arbitrage/docs/ACCEPTANCE.md)。
+## 当前实际限制
 
-## 验证范围
+OKX公共接口可访问，Binance云端探测返回地域限制451。OKX私人账户和实盘验收未完成；非USD报价的美元限额换算未验证时拒绝下单，实盘验证锁保留。审计和测试不保证没有未知漏洞或能够套利获利，不要改验证标志绕过限制。
 
-150项自动化测试全部通过；本地模拟行情连续65秒，三个关注交易对均成功取得盘口。本次正常服务的真实交易所访问受云环境网络策略阻拦，没有真实有效盘口，OKX官方文档及真实接入验收尚未完成，后端实盘锁保留。没有配置真实账户凭据或发送真实订单。
-
-下载包不含 data/、node_modules/、.env、master.key 或真实账户凭据。测试及官方文档中的示例签名、示例 Key 不是真实账户密钥。请不要把本地测试通过视为已完成实盘验收，也不要通过手工改验证标志绕过未完成的接入检查。
+[完整安全复查与验收](spot-arbitrage/docs/RELEASE_REVIEW.md) · [配置说明](spot-arbitrage/docs/FOUR_FEATURES.md)

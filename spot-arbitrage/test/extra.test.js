@@ -46,8 +46,9 @@ test('滚动窗口防止固定窗口边界出现双倍突发', async t => {
 });
 test('OKX 订单项超时码保留为未知，不能视为拒绝', async t => {
   const { store, vault } = setup(t), s = scheduler(t, store);
-  store.state.accounts.okx = '123'; store.state.rules.okx = { 'BTC/USDT': rule() }; store.state.exchangeMeta.okx = { clock: { at: Date.now(), offset: 0 } };
+  store.state.accounts.okx = '123'; store.state.rules.okx = { 'BTC/USD': { ...rule(), symbol: 'BTC-USD', maxUsdNotional: '1000000' } }; store.state.exchangeMeta.okx = { clock: { at: Date.now(), offset: 0 } };
   vault.add({ exchange: 'okx', role: 'trade', apiKey: 'test-api-key1234', secret: 'test-secret1234', passphrase: 'test-passphrase', accountUid: '123', sameAccountConfirmed: true });
   const ex = new Exchanges(store, vault, s, async () => ({ status: 200, headers: {}, data: { code: '0', data: [{ sCode: '50004', sMsg: 'timeout' }] } }));
-  await assert.rejects(ex.order('okx', { pair: 'BTC/USDT', qty: '1', price: '100', side: 'BUY', clientId: 'sampleclient1', guard: () => {} }), e => e.unknown);
+  ex.okxContexts.set('BTC/USD', { pair: 'BTC/USD', symbol: 'BTC-USD', accountUid: '123', accountMode: '1', roleType: '0', spotRoleType: '0', tradeQuoteCcy: 'USD', tradeQuoteCcyList: ['USD'], maxUsdNotional: '1000000', at: Date.now() });
+  await assert.rejects(ex.order('okx', { pair: 'BTC/USD', qty: '1', price: '100', side: 'BUY', clientId: 'sampleclient1', guard: () => {} }), e => e.unknown);
 });

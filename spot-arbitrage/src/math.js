@@ -55,15 +55,36 @@ export function walk(levels, qty) {
   if (remaining.gt(0)) throw Error(`盘口深度不足，缺少数量 ${remaining}`);
   return { total, avg: total.div(qty), worst };
 }
-function quantityForAmount(asks, amount) {
+function quantityForAmount(asks, amount, allowPartial = false) {
   let money = D(amount), qty = D(0);
   for (const [p, q] of asks) {
     const take = Decimal.min(q, money.div(p));
     qty = qty.plus(take); money = money.minus(take.mul(p));
     if (money.lte('0.000000000000000001')) break;
   }
-  if (money.gt('0.00000001')) throw Error('默认或备用金额超过买侧盘口深度');
+  if (!allowPartial && money.gt('0.00000001')) throw Error('默认或备用金额超过买侧盘口深度');
   return qty;
+}
+function spreadBps(book) {
+  const bid = D(book.bids[0][0]), ask = D(book.asks[0][0]);
+  return ask.minus(bid).div(ask.plus(bid).div(2)).mul(10000);
+}
+function executableNotional(levels, limit, buying) {
+  return levels.reduce((sum, [price, quantity]) =>
+    (buying ? D(price).lte(limit) : D(price).gte(limit)) ? sum.plus(D(price).mul(quantity)) : sum, D(0));
+}
+function affordableQuantity(asks, upper, step, tick, rate, maxCost) {
+  const cap = decimal(maxCost, '买侧资金配额', { zero: true });
+  const cost = qty => qty.mul(ceilStep(walk(asks, qty).worst, tick)).mul(D(1).plus(rate));
+  if (upper.lte(0) || cost(upper).lte(cap)) return upper;
+  let low = 0n, high = BigInt(upper.div(step).floor().toFixed(0));
+  while (low < high) {
+    const middle = (low + high + 1n) / 2n;
+    const quantity = D(middle.toString()).mul(step);
+    if (cost(quantity).lte(cap)) low = middle;
+    else high = middle - 1n;
+  }
+  return D(low.toString()).mul(step);
 }
 export function validateOrder(rule, qty, price) {
   if (!rule || !rule.enabled || !rule.step || !rule.tick) throw Error('精度规则缺失或交易对不可交易');
@@ -74,37 +95,66 @@ export function validateOrder(rule, qty, price) {
     if (max && D(max).gt(0) && value.gt(max)) throw Error(`${label} ${value} / 最大值 ${max}`);
   }
 }
-export function evaluate({ buy, sell, buyRule, sellRule, buyExchange, sellExchange, settings, mode = 'arbitrage', balanceConfig, maxQty, now = Date.now() }) {
+export function evaluate({ buy, sell, buyRule, sellRule, buyExchange, sellExchange, settings, mode = 'arbitrage', balanceConfig, maxQty, limits, now = Date.now() }) {
   const attempts = [];
   const amounts = mode === 'balance' ? [balanceConfig.amount] : [settings.amount, ...settings.fallbackAmounts];
   for (const amount of amounts) {
     try {
       if (now - buy.at > settings.maxBookAgeMs || now - sell.at > settings.maxBookAgeMs) throw Error('盘口已过期，需要交易前重新采样');
       const b = normalizeBook(buy, buy.pair, now), s = normalizeBook(sell, buy.pair, now);
+      const filters = settings.filters || {}, bookSkewMs = Math.abs(b.at - s.at);
+      if (filters.maxBookSkewMs != null && (!Number.isInteger(filters.maxBookSkewMs) || filters.maxBookSkewMs < 0)) throw Error('盘口接收时差上限格式错误');
+      if (filters.maxBookSkewMs != null && bookSkewMs > filters.maxBookSkewMs) throw Error(`两所盘口本地接收时差 ${bookSkewMs} ms / 上限 ${filters.maxBookSkewMs} ms`);
+      const buySpread = spreadBps(b), sellSpread = spreadBps(s);
+      if (filters.maxSpreadBps != null) {
+        const maximum = decimal(filters.maxSpreadBps, '所内价差上限', { zero: true });
+        if (buySpread.gt(maximum) || sellSpread.gt(maximum)) throw Error(`所内买卖价差 买侧 ${buySpread} / 卖侧 ${sellSpread} bps / 上限 ${maximum} bps`);
+      }
       const step = commonStep(buyRule.step, sellRule.step);
-      let q = quantityForAmount(b.asks, decimal(amount));
+      const br = decimal(settings.fees[buyExchange], '买侧费率', { zero: true });
+      const sr = decimal(settings.fees[sellExchange], '卖侧费率', { zero: true });
+      const capped = limits?.maxQty != null || limits?.maxBuyCost != null;
+      let q = quantityForAmount(b.asks, decimal(amount), capped);
       if (maxQty != null) q = Decimal.min(q, maxQty);
+      if (limits?.maxQty != null) q = Decimal.min(q, decimal(limits.maxQty, '数量配额', { zero: true }));
       q = floorStep(q, step);
+      if (limits?.maxBuyCost != null) q = affordableQuantity(b.asks, q, step, buyRule.tick, br, limits.maxBuyCost);
+      if (capped && q.lte(0)) throw Error('资金配额或可用余额不足，步长取整后数量为零');
       if (q.lte(0)) throw Error('步长取整后数量为零');
       const bd = walk(b.asks, q), sd = walk(s.bids, q);
       const buyLimit = ceilStep(bd.worst, buyRule.tick), sellLimit = floorStep(sd.worst, sellRule.tick);
       validateOrder(buyRule, q, buyLimit); validateOrder(sellRule, q, sellLimit);
-      const br = decimal(settings.fees[buyExchange], '买侧费率', { zero: true });
-      const sr = decimal(settings.fees[sellExchange], '卖侧费率', { zero: true });
       const buyFee = bd.total.mul(br), sellFee = sd.total.mul(sr);
-      const buffer = D(settings.buffer), net = sd.total.minus(bd.total).minus(buyFee).minus(sellFee).minus(buffer);
+      const buffer = decimal(settings.buffer, '固定缓冲', { zero: true });
+      const rebalanceCost = mode === 'arbitrage' ? decimal(settings.costs?.rebalanceByQuote?.[pair(b.pair).quote] ?? '0', '库存再平衡预估成本', { zero: true }) : D(0);
+      const grossProfit = sd.total.minus(bd.total);
+      const executionNet = grossProfit.minus(buyFee).minus(sellFee).minus(buffer);
+      const net = executionNet.minus(rebalanceCost);
       const bc = q.mul(buyLimit), sc = q.mul(sellLimit);
-      const conservative = sc.mul(D(1).minus(sr)).minus(bc.mul(D(1).plus(br))).minus(buffer);
+      const buyWorstCost = bc.mul(D(1).plus(br));
+      const conservative = sc.mul(D(1).minus(sr)).minus(buyWorstCost).minus(buffer).minus(rebalanceCost);
+      const netBps = conservative.div(buyWorstCost).mul(10000);
+      const buyDepth = executableNotional(b.asks, buyLimit, true), sellDepth = executableNotional(s.bids, sellLimit, false);
       const threshold = mode === 'balance' ? D(balanceConfig.maxLoss).neg() : D(settings.minProfit);
       const depthThreshold = mode === 'balance' ? threshold : D(settings.minDepthProfit);
       const reasons = [];
       if (net.lt(depthThreshold)) reasons.push(`深度净利润 ${net} / 门槛 ${depthThreshold}`);
       if (conservative.lt(threshold)) reasons.push(`限价保守净利润 ${conservative} / 门槛 ${threshold}`);
+      if (mode === 'arbitrage') {
+        const minimumBps = decimal(filters.minNetBps ?? '0', '净收益率门槛', { zero: true });
+        if (minimumBps.gt(0) && netBps.lt(minimumBps)) reasons.push(`保守净收益率 ${netBps} bps / 门槛 ${minimumBps} bps`);
+      }
+      const minimumDepth = decimal(filters.minDepthNotional ?? '0', '限价内深度下限', { zero: true });
+      if (buyDepth.lt(minimumDepth) || sellDepth.lt(minimumDepth)) reasons.push(`限价内有效深度 买侧 ${buyDepth} / 卖侧 ${sellDepth} / 下限 ${minimumDepth}`);
       const result = { pair: b.pair, buyExchange, sellExchange, amount: String(amount), qty: q.toString(),
         buyBest: b.asks[0][0], sellBest: s.bids[0][0], buyAvg: bd.avg.toString(), sellAvg: sd.avg.toString(),
         buyLimit: buyLimit.toString(), sellLimit: sellLimit.toString(), buyCost: bd.total.toString(), sellProceeds: sd.total.toString(),
         buyFee: buyFee.toString(), sellFee: sellFee.toString(), net: net.toString(), conservative: conservative.toString(),
-        buyWorstCost: bc.mul(D(1).plus(br)).toString(), sellBaseRequired: q.mul(D(1).plus(sr)).toString(),
+        grossProfit: grossProfit.toString(), executionNet: executionNet.toString(), rebalanceCost: rebalanceCost.toString(),
+        totalCosts: buyFee.plus(sellFee).plus(buffer).plus(rebalanceCost).toString(), netBps: netBps.toString(),
+        buySpreadBps: buySpread.toString(), sellSpreadBps: sellSpread.toString(), bookSkewMs,
+        buyDepthNotional: buyDepth.toString(), sellDepthNotional: sellDepth.toString(),
+        buyWorstCost: buyWorstCost.toString(), sellBaseRequired: q.mul(D(1).plus(sr)).toString(),
         at: now, sampleAt: Math.min(b.at, s.at), eligible: reasons.length === 0, reasons, mode };
       attempts.push(result);
       if (result.eligible) return { ...result, attempts };

@@ -1,15 +1,30 @@
 import crypto from 'node:crypto';
 import { D, decimal, evaluate, pair } from './math.js';
 import { binancePreflightBudget } from './scheduler.js';
+import { validateEnhancements, quotaConstraints, assertQuota, syncRisk, riskStatus, resetRisk } from './policies.js';
+export { RISK_RESET_CONFIRM } from './policies.js';
 export const LIVE_CONFIRM = '确认开启实盘并理解双腿风险';
 export const LOSS_CONFIRM = '确认允许动态平衡亏损';
 export const RESOLVE_CONFIRM = '已在交易所核对两腿及库存';
+// Settings are patches: changing one venue/asset must preserve its other limits.
+// Reject magic property names before merging, including in otherwise unknown fields.
+function mergeSettings(previous, patch) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return structuredClone(patch);
+  if (![Object.prototype, null].includes(Object.getPrototypeOf(patch))) throw Error('设置必须为普通对象');
+  const result = previous && typeof previous === 'object' && !Array.isArray(previous) ? structuredClone(previous) : {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (['__proto__', 'prototype', 'constructor'].includes(key)) throw Error('设置包含不允许的属性名');
+    result[key] = value && typeof value === 'object' && !Array.isArray(value) ? mergeSettings(result[key], value) : structuredClone(value);
+  }
+  return result;
+}
 export function validateConfig(input, previous, confirmation) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw Error('设置格式错误');
   const allowed = ['exchanges', 'pairs', 'amount', 'fallbackAmounts', 'fees', 'feeConfirmed', 'buffer', 'minProfit', 'minDepthProfit',
-    'maxBookAgeMs', 'maxBalanceAgeMs', 'slotMs', 'balanceRefreshMs', 'budgets', 'unknownAction', 'scannerAuto', 'scanQuote', 'balance'];
+    'maxBookAgeMs', 'maxBalanceAgeMs', 'slotMs', 'balanceRefreshMs', 'budgets', 'unknownAction', 'scannerAuto', 'scanQuote', 'balance',
+    'costs', 'filters', 'capital', 'risk'];
   if (Object.keys(input).some(k => !allowed.includes(k))) throw Error('设置包含未允许的字段；实盘必须单独确认');
-  const next = structuredClone({ ...previous, ...input });
+  const next = mergeSettings(previous, input);
   if (!Array.isArray(next.exchanges) || next.exchanges.length !== 2 || new Set(next.exchanges).size !== 2 || next.exchanges.some(x => !['binance', 'okx'].includes(x))) throw Error('请选择 Binance 和 OKX 两个不同现货交易所');
   if (!Array.isArray(next.pairs) || next.pairs.length < 1 || next.pairs.length > 30 || new Set(next.pairs).size !== next.pairs.length) throw Error('关注交易对数量应为 1–30 且不可重复');
   next.pairs.forEach(pair);
@@ -35,6 +50,7 @@ export function validateConfig(input, previous, confirmation) {
     if (loss.gt(cfg.amount)) throw Error('每笔最大亏损不得超过交易金额');
     if (loss.gt(0) && !loss.eq(previous.balance?.[id]?.maxLoss || 0) && confirmation !== LOSS_CONFIRM) throw Error('设置正数最大亏损必须再次确认');
   }
+  Object.assign(next, validateEnhancements(next));
   return next;
 }
 export class Engine {
@@ -42,13 +58,31 @@ export class Engine {
     this.store = store; this.exchanges = exchanges; this.docsVerified = docsVerified;
     this.busy = false; this.polling = false; this.balanceBusy = false; this.scanBusy = false;
     this.pendingValidations = new Set(); this.running = false; this.scanRequested = false;
+    this.syncRisk();
   }
   start() { this.running = true; this.timer = setInterval(() => this.tick().catch(e => this.store.error('engine', e.message)), 250); this.timer.unref(); this.tick().catch(e => this.store.error('engine', e.message)); }
   stop() { this.running = false; clearInterval(this.timer); this.store.state.config.autoTrading = false; this.store.save(); }
   updateConfig(input, confirmation) {
     if (this.busy || this.store.state.config.autoTrading) throw Error('请先停止实盘并等待正在执行的批次完成后修改设置');
     const next = validateConfig(input, this.store.state.config, confirmation);
-    this.store.state.config = next; this.store.event('已更新设置'); return next;
+    this.store.state.config = next; syncRisk(this.store.state); this.store.event('已更新设置'); return next;
+  }
+  syncRisk() {
+    const state = this.store.state, before = JSON.stringify([state.riskState, state.config.autoTrading]);
+    const status = syncRisk(state);
+    if (before !== JSON.stringify([state.riskState, state.config.autoTrading])) this.store.save();
+    return status;
+  }
+  riskStatus() { return riskStatus(this.store.state); }
+  riskReason(status = this.riskStatus()) {
+    return `风险熔断已锁定：${Object.entries(status.latches).map(([quote, latch]) => `${quote} 已核对亏损 ${latch.loss} / 限额 ${latch.limit}（${latch.day}）`).join('；')}；停止新单，需人工复位`;
+  }
+  assertRisk() { const status = this.syncRisk(); if (status.latched) throw Error(this.riskReason(status)); }
+  resetRisk(confirm) {
+    if (this.busy) throw Error('请等待正在执行的批次完成后复位风险熔断');
+    const status = resetRisk(this.store.state, confirm);
+    this.store.event('已人工复位风险熔断；亏损台账及历史记录保留');
+    return status;
   }
   unresolved() { return this.store.state.batches.filter(x => !['REJECTED', 'RESOLVED'].includes(x.status)); }
   binanceBudgetReason() {
@@ -59,10 +93,11 @@ export class Engine {
   }
   liveReasons() {
     const state = this.store.state, reasons = [];
+    const risk = this.syncRisk(); if (risk.latched) reasons.push(this.riskReason(risk));
     const budgetReason = this.binanceBudgetReason(); if (budgetReason) reasons.push(budgetReason);
     if (!state.config.feeConfirmed) reasons.push('请按两所账户实际 taker 费率设置手续费并确认');
     for (const ex of state.config.exchanges) {
-      if (!this.docsVerified[ex]) reasons.push(`${ex} 官方 API 文档核对尚未完成，实盘接入锁定`);
+      if (!this.docsVerified[ex]) reasons.push(`${ex} 官方 API 文档或适配验收尚未全部完成，实盘接入锁定`);
       if (!state.accounts[ex]) reasons.push(`${ex} 尚未验证查询 Key 的账户 UID`);
       if (!state.keys.some(k => k.exchange === ex && k.role === 'query' && k.enabled && k.status === 'VERIFIED')) reasons.push(`${ex} 无已验证查询 Key`);
       try { this.exchanges.chooseTrade(ex); } catch (e) { reasons.push(e.message); }
@@ -86,6 +121,7 @@ export class Engine {
   async tick() {
     if (!this.running) return;
     const state = this.store.state, now = Date.now();
+    this.syncRisk();
     if (!this.polling && !this.busy && now - state.engine.lastPollAt >= this.slotMs()) {
       this.polling = true; state.engine.lastPollAt = now;
       const index = state.engine.cursor % state.config.pairs.length, id = state.config.pairs[index];
@@ -113,7 +149,7 @@ export class Engine {
     }
     const directions = exchanges.map((buyExchange, index) => {
       const sellExchange = exchanges[1 - index];
-      return evaluate({ buy: state.books[buyExchange][id], sell: state.books[sellExchange][id], buyRule: state.rules[buyExchange][id], sellRule: state.rules[sellExchange][id], buyExchange, sellExchange, settings: state.config });
+      return this.previewDirection(id, buyExchange, sellExchange);
     });
     state.opportunities[id] = { pair: id, at: Date.now(), directions }; this.store.save();
     if (state.config.autoTrading && !this.busy && !this.unresolved().length) {
@@ -126,7 +162,24 @@ export class Engine {
       }
     }
   }
-  balanceDirection(id) {
+  cachedQuota(id, buyExchange, sellExchange) {
+    const state = this.store.state;
+    if (!state.config.capital?.enabled) return { limits: undefined, capital: { enabled: false, checked: false, status: 'DISABLED' } };
+    try {
+      const limits = quotaConstraints(state, id, buyExchange, sellExchange);
+      return { limits, capital: { ...limits.details, checked: true, status: 'CACHED', source: 'cache' } };
+    } catch (error) {
+      // Public market data remains useful without an authenticated balance cache.
+      // This metadata is an estimate only; submit always performs fresh preflight.
+      return { limits: undefined, capital: { enabled: true, checked: false, status: 'UNCONFIRMED', source: 'cache', error: error.message } };
+    }
+  }
+  previewDirection(id, buyExchange, sellExchange, books) {
+    const state = this.store.state, preview = this.cachedQuota(id, buyExchange, sellExchange);
+    return { ...evaluate({ buy: books ? books[buyExchange] : state.books[buyExchange]?.[id], sell: books ? books[sellExchange] : state.books[sellExchange]?.[id],
+      buyRule: state.rules[buyExchange]?.[id], sellRule: state.rules[sellExchange]?.[id], buyExchange, sellExchange, settings: state.config, limits: preview.limits }), capital: preview.capital };
+  }
+  balanceDirection(id, limits) {
     try {
       const state = this.store.state, cfg = state.config.balance[id];
       if (!cfg?.enabled) throw Error('该资产动态平衡已暂停');
@@ -136,9 +189,12 @@ export class Engine {
       if (diff.abs().lte(cfg.stopDifference)) throw Error(`库存差额 ${diff.abs()} / 停止差额 ${cfg.stopDifference}`);
       const buyExchange = diff.gt(0) ? b : a, sellExchange = diff.gt(0) ? a : b;
       const maxQty = diff.abs().minus(cfg.stopDifference).div(2);
-      const result = evaluate({ buy: state.books[buyExchange]?.[id], sell: state.books[sellExchange]?.[id], buyRule: state.rules[buyExchange]?.[id], sellRule: state.rules[sellExchange]?.[id], buyExchange, sellExchange, settings: state.config, mode: 'balance', balanceConfig: cfg, maxQty });
-      return { ...result, difference: diff.abs().toString(), maxQty: maxQty.toString() };
-    } catch (e) { return { pair: id, eligible: false, reasons: [e.message] }; }
+      const preview = limits === undefined ? this.cachedQuota(id, buyExchange, sellExchange) : { limits,
+        capital: limits ? { ...limits.details, checked: true, status: 'PREFLIGHT', source: 'preflight' } : { enabled: false, checked: false, status: 'DISABLED' } };
+      const result = evaluate({ buy: state.books[buyExchange]?.[id], sell: state.books[sellExchange]?.[id], buyRule: state.rules[buyExchange]?.[id], sellRule: state.rules[sellExchange]?.[id], buyExchange, sellExchange, settings: state.config, mode: 'balance', balanceConfig: cfg, maxQty, limits: preview.limits });
+      return { ...result, difference: diff.abs().toString(), maxQty: maxQty.toString(), capital: preview.capital };
+    } catch (e) { return { pair: id, eligible: false, reasons: [e.message], capital: this.store.state.config.capital?.enabled
+      ? { enabled: true, checked: false, status: 'UNCONFIRMED', source: 'cache', error: e.message } : { enabled: false, checked: false, status: 'DISABLED' } }; }
   }
   assertBalances(opportunity) {
     const state = this.store.state, { base, quote } = pair(opportunity.pair);
@@ -149,6 +205,7 @@ export class Engine {
     const buyer = state.balances[opportunity.buyExchange].assets, seller = state.balances[opportunity.sellExchange].assets;
     if (D(buyer[quote]?.free || 0).lt(opportunity.buyWorstCost)) throw Error(`买侧 ${quote} 可用余额 ${buyer[quote]?.free || 0} / 所需 ${opportunity.buyWorstCost}`);
     if (D(seller[base]?.free || 0).lt(opportunity.sellBaseRequired)) throw Error(`卖侧 ${base} 可用库存 ${seller[base]?.free || 0} / 所需 ${opportunity.sellBaseRequired}`);
+    assertQuota(state, opportunity);
   }
   async preflight(id, buyExchange, mode) {
     const state = this.store.state, [a, b] = state.config.exchanges;
@@ -162,25 +219,28 @@ export class Engine {
     const contexts = Object.fromEntries(await Promise.all([a, b].map(async ex => [ex, await this.exchanges.priceContext(ex, id)])));
     // Full fresh depth is acquired AFTER rules and balances, never from the browser.
     await Promise.all([a, b].map(ex => this.exchanges.book(ex, id, 0)));
+    const sellExchange = buyExchange === a ? b : a;
+    const quota = state.config.capital?.enabled ? quotaConstraints(state, id, buyExchange, sellExchange) : null;
     let opportunity;
     if (mode === 'balance') {
-      opportunity = this.balanceDirection(id);
+      opportunity = this.balanceDirection(id, quota);
       if (opportunity.buyExchange !== buyExchange) throw Error('最新库存平衡方向已变化，取消本批次');
     } else {
-      const sellExchange = buyExchange === a ? b : a;
-      opportunity = evaluate({ buy: state.books[buyExchange][id], sell: state.books[sellExchange][id], buyRule: state.rules[buyExchange][id], sellRule: state.rules[sellExchange][id], buyExchange, sellExchange, settings: state.config });
+      opportunity = evaluate({ buy: state.books[buyExchange][id], sell: state.books[sellExchange][id], buyRule: state.rules[buyExchange][id], sellRule: state.rules[sellExchange][id], buyExchange, sellExchange, settings: state.config, limits: quota });
     }
     if (!opportunity.eligible) throw Error(opportunity.reasons.join('；'));
     this.assertBalances(opportunity);
     this.exchanges.assertPriceContext(opportunity.buyExchange, id, 'BUY', opportunity.qty, opportunity.buyLimit, contexts[opportunity.buyExchange]);
     this.exchanges.assertPriceContext(opportunity.sellExchange, id, 'SELL', opportunity.qty, opportunity.sellLimit, contexts[opportunity.sellExchange]);
     opportunity.priceContexts = contexts;
+    if (quota) opportunity.capital = { ...quota.details, checked: true, status: 'PREFLIGHT', source: 'preflight' };
     return opportunity;
   }
   async submit(id, buyExchange, mode = 'arbitrage') {
     pair(id);
     const state = this.store.state;
     if (!state.config.pairs.includes(id) || !['arbitrage', 'balance'].includes(mode)) throw Error('未关注的交易对或交易模式错误');
+    this.assertRisk();
     if (!state.config.autoTrading) throw Error('实盘开关关闭，拒绝下单');
     if (this.busy || this.unresolved().length || Object.keys(state.blocks).length) throw Error('存在未处理订单、异常阻塞或执行中的批次');
     const reasons = this.liveReasons(); if (reasons.length) throw Error(reasons.join('；'));
@@ -189,13 +249,16 @@ export class Engine {
     state.batches.unshift(batch); state.blocks[id] = `正在处理批次 ${batch.id}`; this.store.save();
     try {
       const opportunity = await this.preflight(id, buyExchange, mode);
+      this.assertRisk();
       if (!state.config.autoTrading) throw Error('复核期间已停止实盘');
       batch.opportunity = opportunity; batch.expectedNet = opportunity.net;
+      if (opportunity.capital) batch.capital = structuredClone(opportunity.capital);
       const legs = [
         { exchange: opportunity.buyExchange, side: 'BUY', price: opportunity.buyLimit },
         { exchange: opportunity.sellExchange, side: 'SELL', price: opportunity.sellLimit },
       ];
       for (const intent of legs) {
+        this.assertRisk();
         if (!state.config.autoTrading) throw Error('两腿提交期间已停止实盘，后续腿未发送');
         if (Date.now() - opportunity.sampleAt > state.config.maxBookAgeMs) throw Error('最终复核盘口已过期，后续腿未发送');
         this.assertBalances(opportunity);
@@ -203,6 +266,7 @@ export class Engine {
         batch.legs.push(leg); batch.status = 'SUBMITTING'; this.store.save();
         try {
           const ack = await this.exchanges.order(leg.exchange, { pair: id, ...leg, guard: () => {
+            this.assertRisk();
             if (!state.config.autoTrading) throw Error('排队期间已停止实盘，订单未发送');
             if (Date.now() - opportunity.sampleAt > state.config.maxBookAgeMs) throw Error('排队期间最终复核盘口已过期，订单未发送');
             this.assertBalances(opportunity);
@@ -241,11 +305,14 @@ export class Engine {
       if (!['FILLED', 'PARTIAL_CLOSED', 'CANCELED', 'REJECTED', 'NOT_FOUND_CONFIRMED'].includes(leg.outcome) || leg.openQty !== '0') throw Error('仍有未关闭订单时不能解除安全阻塞');
       if (decimal(leg.executedQty, '已成交数量', { zero: true }).gt(batch.legs[i].qty)) throw Error('已成交数量大于提交数量');
     }
-    if (!/^-?\d+(\.\d+)?$/.test(String(data.realizedNet))) throw Error('实际净收益格式错误');
+    if (String(data.realizedNet).length > 80 || !/^-?\d+(\.\d+)?$/.test(String(data.realizedNet))) throw Error('实际净收益格式错误');
+    const realizedNet = D(data.realizedNet);
+    decimal(realizedNet.abs(), '实际净收益', { zero: true });
     batch.resolution = { at: Date.now(), reference: data.reference, legs: data.legs };
-    batch.realizedNet = D(data.realizedNet).toString(); batch.status = 'RESOLVED';
+    batch.realizedNet = realizedNet.toString(); batch.status = 'RESOLVED';
     delete this.store.state.blocks[batch.pair];
     for (const ex of this.store.state.config.exchanges) if (this.store.state.balances[ex]) this.store.state.balances[ex].valid = false;
+    syncRisk(this.store.state);
     this.store.event(`批次 ${id} 已人工核对；重新刷新余额后方可开启实盘`);
   }
   async scanOne() {
@@ -261,7 +328,7 @@ export class Engine {
     const books = Object.fromEntries(await Promise.all([a, b].map(async ex => [ex, await this.exchanges.book(ex, id, priority, { persist: state.config.pairs.includes(id) })])));
     state.scanResults[id] = { at: Date.now(), directions: [a, b].map((buyExchange, i) => {
       const sellExchange = [a, b][1 - i];
-      return evaluate({ buy: books[buyExchange], sell: books[sellExchange], buyRule: state.rules[buyExchange][id], sellRule: state.rules[sellExchange][id], buyExchange, sellExchange, settings: state.config });
+      return this.previewDirection(id, buyExchange, sellExchange, books);
     }) };
     const entries = Object.entries(state.scanResults).sort((a, b) => b[1].at - a[1].at); state.scanResults = Object.fromEntries(entries.slice(0, 300));
     if (index === ids.length - 1) this.scanRequested = false;

@@ -9,7 +9,7 @@ test('凭据加密保存且公开接口完全不含密钥', t => {
   assert.equal(vault.open(store.state.keys[0]).secret, secret);
   assert.ok(!fs.readFileSync(dir + '/state.json', 'utf8').includes(secret));
   assert.ok(!JSON.stringify(vault.publicKeys()).includes(secret)); assert.ok(!JSON.stringify(vault.publicKeys()).includes('ciphertext'));
-  assert.equal(fs.statSync(dir + '/master.key').mode & 0o777, 0o600);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(dir + '/master.key').mode & 0o777, 0o600);
 });
 test('篡改加密数据会拒绝解密', t => { const { store, vault } = setup(t); vault.add({ exchange: 'binance', role: 'query', apiKey: 'abcdefghijk123', secret: 'abcdefghijk123' }); store.state.keys[0].sealed.tag = Buffer.alloc(16).toString('base64'); assert.throws(() => vault.open(store.state.keys[0])); });
 test('同一 Key 不可同时用于查询与交易', t => { const { vault } = setup(t); const k = { exchange: 'binance', apiKey: 'abcdefghijk123', secret: 'abcdefghijk123' }; vault.add({ ...k, role: 'query' }); assert.throws(() => vault.add({ ...k, role: 'trade', accountUid: '123', sameAccountConfirmed: true }), /兼任/); });

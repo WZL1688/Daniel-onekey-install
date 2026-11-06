@@ -1,0 +1,20 @@
+使用前请先阅读
+
+本包是 Node.js 源码工具，不是 exe，也不能双击 package.json 启动。
+
+Windows：
+1. 从 https://nodejs.org/ 安装当前 Windows LTS 版，保留默认 npm/PATH 选项。
+2. 将本 ZIP 全部解压到自己的用户文件夹，不要在压缩包内运行。
+3. 双击 1-install-windows.cmd，出现 Installation finished 后关闭。
+4. 双击 2-start-windows.cmd，保持窗口开启。
+5. 等窗口显示工具已启动，在浏览器打开 http://127.0.0.1:8888 。
+6. 使用完成按 Ctrl+C 正常停止。不要同时开两份。
+
+不需要 Ubuntu，不要求管理员权限。原生 Windows 尚无完整实机验收，详见 docs/WINDOWS.md。
+
+当前可用：本地管理界面、四项配置、可访问交易所的公共行情监控。
+当前未完成：真实账户与实盘验收；OKX 仍有实盘锁，非 USD 报价限额换算未验证时会拒绝下单；云端 Binance 返回地域限制451。
+本版本不能承诺直接用真金白银自动套利。不要自行改验证标志绕过限制。
+
+Key 仅在自己的本机界面输入，禁止发到聊天。不要共享 data 文件夹或 master.key。
+请阅读 README.md 和 docs/RELEASE_REVIEW.md，了解本次修复、测试结果和剩余限制。

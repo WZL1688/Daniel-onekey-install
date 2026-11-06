@@ -1,0 +1,23 @@
+{
+  "type": "ACTUAL_LINUX_DEFAULT_PORT_STARTUP",
+  "port": 8888,
+  "healthStatus": 200,
+  "stateStatus": 200,
+  "statuses": {
+    "/": 200,
+    "/app.js": 200,
+    "/style.css": 200,
+    "/api/session": 200
+  },
+  "liveTrading": false,
+  "keyCount": 0,
+  "batchCount": 0,
+  "uptimeSeconds": 58.759008536,
+  "riskLatched": false,
+  "docsVerified": {
+    "binance": true,
+    "okx": false
+  },
+  "dataScope": "separate temporary directory, no existing user data",
+  "observedAt": "2026-11-06T02:25:32.375Z"
+}

@@ -51,7 +51,7 @@ export function createApp({ dataDir = process.env.ARB_DATA_DIR || path.join(ROOT
         return json(res, 200, { now, config: state.config, keys: vault.publicKeys(), accounts: state.accounts, balances: state.balances,
           books, opportunities, scanResults: state.scanResults, batches: state.batches.slice(0, 200), blocks: state.blocks,
           engine: { ...state.engine, running: engine.running, busy: engine.busy, slotMs: engine.slotMs(), estimatedCycleMs: engine.slotMs() * state.config.pairs.length, scannerRunning: engine.scanRequested },
-          rates: scheduler.snapshot(), errors: state.errors.slice(0, 60), events: state.events.slice(0, 60), liveReasons: engine.liveReasons(), docsVerified: engine.docsVerified,
+          rates: scheduler.snapshot(), errors: state.errors.slice(0, 60), events: state.events.slice(0, 60), liveReasons: engine.liveReasons(), docsVerified: engine.docsVerified, risk: engine.riskStatus(),
           balanceDirections: Object.fromEntries(state.config.pairs.map(id => [id, engine.balanceDirection(id)])) });
       }
       if (req.method === 'GET' && url.pathname === '/api/records') {
@@ -94,6 +94,7 @@ export function createApp({ dataDir = process.env.ARB_DATA_DIR || path.join(ROOT
           return json(res, 202, { queued: true, note: '后台将重新复核；请查看提交记录' });
         }
         if (url.pathname === '/api/resolve') { engine.resolve(data.id, data); return json(res, 200, { ok: true }); }
+        if (url.pathname === '/api/risk/reset') return json(res, 200, { risk: engine.resetRisk(data.confirm) });
         if (url.pathname === '/api/cancel') {
           const batch = store.state.batches.find(b => b.id === data.batchId), leg = batch?.legs?.[data.legIndex];
           if (!leg?.orderId || data.confirm !== '确认撤销此订单' || engine.busy) throw Error('只能明确确认后撤销已记录订单号的订单');
