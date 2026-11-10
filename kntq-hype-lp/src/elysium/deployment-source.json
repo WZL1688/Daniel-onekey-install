@@ -1,0 +1,58 @@
+{
+  "checkedAt": "2026-11-10",
+  "source": "https://github.com/Uniswap/contracts/blob/3b872969fff4f5d807db916564f79843d722af36/deployments/json/99901.json",
+  "repositoryCommit": "3b872969fff4f5d807db916564f79843d722af36",
+  "chainId": 99901,
+  "contracts": {
+    "PoolManager": {
+      "address": "0xe2e105d3f7209a9da11f83ccf3e7398a753823f1",
+      "proxy": false,
+      "deploymentTxn": "0x30fc8b36b478ee039fb591df369300815bc28bbf46187de8987ca0ddf5b1b08e",
+      "initcodeHash": "2d448fd10fda75c1bb62fb85673c55182786d0c2e336353706d6bbfcce5ecb95",
+      "timestamp": 1793678997020,
+      "commitHash": "ac1f0be"
+    },
+    "PositionManager": {
+      "address": "0x1d1c51b9d07fd27d36412a2b66cc23d19eb3e518",
+      "proxy": false,
+      "deploymentTxn": "0x25c7ae7b9304cc388afef33bdfc236de2c94248fb6ac8e980214b5acd4559b5d",
+      "initcodeHash": "0a25cb6dfbe821e73d6e10eb1ada82df7e1f7014572b8c2e5cb66b05299a8993",
+      "timestamp": 1793678997020,
+      "commitHash": "ac1f0be"
+    },
+    "StateView": {
+      "address": "0x27ed73ae0652fdcf71d6793412a7525f32be9dfe",
+      "proxy": false,
+      "deploymentTxn": "0x78f896d5997921f906b9ffecf4f798cae5856a55b86b5c971cc63992ff16e745",
+      "initcodeHash": "d9b51f035866e185364a5adea61f7ac1a7f4d0aa71e79861d85365f584acc5e5",
+      "timestamp": 1793678997020,
+      "commitHash": "ac1f0be"
+    },
+    "Permit2": {
+      "address": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+      "proxy": false,
+      "deploymentTxn": "0x135f2a5cf09d39191f5b6d27f02f58ef2d56a311322b659f35a4eec5e7b69455",
+      "initcodeHash": "2e7b6978f8196f5c26525136117f71034af728bec7cf8dc58b04a80ad5dad67e",
+      "timestamp": 1792619489000,
+      "note": "pre-existing canonical deployment; not deployed by this repo"
+    },
+    "PositionDescriptor": {
+      "implementation": "0x599141dbd536891ef30b81883bfb4a621dc3f496",
+      "address": "0x9f92c5297eb3b39e6804b5e03899bc66b6b77348",
+      "proxy": true,
+      "proxyType": "TransparentUpgradeableProxy",
+      "deploymentTxn": "0xb11fd72e3c16c2c0eaedb8589b6817a88153f13156237f1e7b207f37e8129167",
+      "proxyAdmin": "0x031b9eb5d9e5610f57b095c1003346b9928e1566",
+      "initcodeHash": "d468a4c84b14b4595f556845991c20ea1501ad8b79aa078d22320272e6794b8d",
+      "timestamp": 1793678997020,
+      "commitHash": "ac1f0be"
+    }
+  },
+  "positionManagerConstructor": {
+    "_poolManager": "0xE2e105d3F7209A9DA11f83cCf3E7398a753823F1",
+    "_permit2": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+    "_unsubscribeGasLimit": "2000000",
+    "_tokenDescriptor": "0x9f92C5297EB3b39E6804b5e03899bC66B6b77348",
+    "_weth9": "0xbA876237B0F021A6c6D852d6c26E107997cC5E81"
+  }
+}

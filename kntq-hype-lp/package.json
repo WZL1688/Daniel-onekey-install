@@ -1,0 +1,38 @@
+{
+  "name": "kntq-hype-lp",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "vitest run",
+    "check": "tsc -b",
+    "test:browser": "node tests/browser.mjs",
+    "test:browser:v4": "node tests/browser-v4.mjs",
+    "test:browser:all": "npm run test:browser && npm run test:browser:v4"
+  },
+  "dependencies": {
+    "@uniswap/sdk-core": "^7.9.0",
+    "@uniswap/v3-sdk": "^3.25.2",
+    "jsbi": "^3.2.5",
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "viem": "^2.38.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.4.0",
+    "typescript": "~5.8.3",
+    "vite": "^6.4.5",
+    "vitest": "^5.1.0",
+    "playwright": "^1.56.1"
+  },
+  "engines": {
+    "node": "^22.12.0 || ^24.0.0 || >=26.0.0"
+  }
+}

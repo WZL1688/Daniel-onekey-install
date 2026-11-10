@@ -1,0 +1,16 @@
+{
+  "version": "0.2.0",
+  "sourceLocalCommit": "d646cd8f8798788b8f330bff40a1c28db6ce372e",
+  "archiveBytes": 497773,
+  "sha256": "4e12ee5fafb8a099d03e00258fb14dd406dae73d15da47a02a186a081e34fb57",
+  "gitBlobSha1": "b34d6e2ed17fea52aa956bc64871ca44695a71ff",
+  "unitTests": 133,
+  "browserChecks": 44,
+  "mainnetWrites": 0,
+  "repository": "WZL1688/Daniel-onekey-install",
+  "branch": "codex/kntq-hype-lp-v0.2.0",
+  "archivePath": "downloads/kntq-hype-lp-v0.2.0.zip",
+  "sourcePath": "kntq-hype-lp",
+  "fundedMainnetTransactionsVerified": false,
+  "rpcLiveSnapshotVerified": false
+}
