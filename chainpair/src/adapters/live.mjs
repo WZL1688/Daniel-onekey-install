@@ -1,4 +1,4 @@
-import { createHmac, randomUUID } from 'node:crypto';
+import { createHmac, randomUUID, createPublicKey, verify } from 'node:crypto';
 import { Interface, getAddress, keccak256 } from 'ethers';
 import { VersionedTransaction, PublicKey, TransactionMessage, AddressLookupTableAccount } from '@solana/web3.js';
 import bs58 from 'bs58';
@@ -53,6 +53,34 @@ const json = value => JSON.parse(JSON.stringify(value, (_, x) => typeof x === 'b
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const unit = (amount, decimals) => decimal(amount).div(new Decimal(10).pow(decimals));
 
+export function verifyPublishedEvmTransaction(expected, actual, hash) {
+  try {
+    if (!actual || !same('bnb', actual.hash, hash) || !same('bnb', actual.from, expected.from) ||
+        !same('bnb', actual.to, expected.to) || String(actual.input ?? actual.data).toLowerCase() !== expected.data.toLowerCase() ||
+        BigInt(actual.value) !== BigInt(expected.value) || BigInt(actual.gas) <= 0n || BigInt(actual.gas) > BigInt(expected.gas) ||
+        BigInt(actual.gasPrice) <= 0n || BigInt(actual.gasPrice) > BigInt(expected.gasPrice) ||
+        (actual.chainId !== undefined && BigInt(actual.chainId) !== 56n) ||
+        (actual.maxFeePerGas !== undefined && BigInt(actual.maxFeePerGas) > BigInt(expected.gasPrice))) throw new Error();
+  } catch { throw new AdapterError('插件已发送的 BNB 交易与已核验意图或费用上限不一致，已暂停，请核对交易哈希'); }
+  return true;
+}
+
+export function validateBrowserSolanaSignature(encoded, original, expectedSender) {
+  try {
+    if (typeof encoded !== 'string' || encoded.length > 1800 || encoded.length % 4 || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) throw new Error();
+    const bytes = Buffer.from(encoded, 'base64');
+    if (bytes.toString('base64') !== encoded || bytes.length > 1232) throw new Error();
+    const signed = VersionedTransaction.deserialize(bytes);
+    const message = Buffer.from(signed.message.serialize());
+    const keys = signed.message.staticAccountKeys ?? signed.message.accountKeys;
+    if (!message.equals(Buffer.from(original.message.serialize())) || signed.message.header.numRequiredSignatures !== 1 ||
+        signed.signatures.length !== 1 || keys[0].toBase58() !== expectedSender) throw new Error();
+    const publicKey = createPublicKey({ key: Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), new PublicKey(expectedSender).toBuffer()]), format: 'der', type: 'spki' });
+    if (!verify(null, message, publicKey, signed.signatures[0])) throw new Error();
+    return signed;
+  } catch { throw new AdapterError('插件返回的 Solana 签名、付款人或交易内容无效，未广播交易'); }
+}
+
 export function tokenNetFromEvmReceipt(receipt, token, owner) {
   let net = 0n;
   for (const log of receipt.logs ?? []) {
@@ -95,8 +123,9 @@ export function validateSolanaSimulationTokens({ quote, beforeAccounts, afterAcc
 }
 
 export class LiveAdapter {
-  constructor({ getConfig, vault, onRpcStatus = () => {}, fetchImpl = globalThis.fetch, confirmationTimeoutMs = 180000, bridgeTimeoutMs = 1800000 }) {
+  constructor({ getConfig, vault, browserWallets, onRpcStatus = () => {}, fetchImpl = globalThis.fetch, confirmationTimeoutMs = 180000, bridgeTimeoutMs = 1800000, browserTransactionTimeoutMs = 15000 }) {
     this.getConfig = getConfig; this.vault = vault; this.fetch = fetchImpl;
+    this.browserWallets = browserWallets; this.browserTransactionTimeoutMs = browserTransactionTimeoutMs;
     this.confirmationTimeoutMs = confirmationTimeoutMs; this.bridgeTimeoutMs = bridgeTimeoutMs;
     this.quotes = new Map(); this.used = new Set(); this.rpc = {};
     for (const chain of Object.keys(CHAINS)) this.rpc[chain] = new RpcPool({ chain, getUrls: () => this.getConfig().chains[chain].rpcs, fetchImpl, onStatus: onRpcStatus });
@@ -333,7 +362,11 @@ export class LiveAdapter {
     if (Date.parse(quote.expiresAt) < Date.now()) throw new AdapterError('报价已过期，请重新报价');
     if (this.used.has(quote.id)) throw new AdapterError('报价已提交，禁止重复发送');
     if (!same(quote.fromChain, this.wallet(quote.fromChain), quote.sender) || !same(quote.toChain, this.wallet(quote.toChain), quote.recipient)) throw new AdapterError('钱包已变更，必须重新报价');
-    const signer = await this.vault.signer(quote.fromChain), balances = await this.balances(quote.fromChain), c = this.getConfig();
+    const wallet = this.vault.publicStatus()[quote.fromChain], browser = wallet?.mode === 'browser';
+    if (browser && (!wallet.canSign || !this.browserWallets)) throw new AdapterError('插件钱包未连接，请保持本机页面打开并重新连接');
+    const signer = browser ? null : await this.vault.signer(quote.fromChain);
+    let balances = await this.balances(quote.fromChain);
+    const c = this.getConfig();
     const fee = quote.fromChain === 'bnb' ? await this.validateEvmTx(quote, quote.tx) : await this.validateSolanaTx(quote, this.decodeSolana(quote.tx.data));
     const reserve = quote.fromChain === 'bnb' ? c.risk.reserveBnb : c.risk.reserveSol;
     if (decimal(balances.native).minus(quote.fromChain === 'bnb' ? fee.bnbGas : fee.solFee).lt(reserve)) throw new AdapterError('原生币不足以支付费用并保留 Gas 资金');
@@ -343,14 +376,29 @@ export class LiveAdapter {
     if (quote.fromChain === 'bnb') await this.assertAllowance(quote);
     let signed, hash, blockhash;
     if (quote.fromChain === 'bnb') {
-      const tx = quote.tx, nonce = await this.rpc.bnb.call('eth_getTransactionCount', [quote.sender, 'pending']);
-      const request = { to: tx.to, data: tx.data, value: BigInt(tx.value ?? 0), chainId: 56, nonce: Number(BigInt(nonce)), gasLimit: BigInt(tx.gas ?? tx.gasLimit), gasPrice: BigInt(tx.gasPrice ?? tx.maxFeePerGas) };
+      const tx = quote.tx;
+      const request = { to: tx.to, data: tx.data, value: BigInt(tx.value ?? 0), chainId: 56, gasLimit: BigInt(tx.gas ?? tx.gasLimit), gasPrice: BigInt(tx.gasPrice ?? tx.maxFeePerGas) };
       await this.rpc.bnb.call('eth_call', [{ from: quote.sender, to: request.to, data: request.data, value: `0x${request.value.toString(16)}` }, 'pending']);
+      if (browser) return this.submitBrowserEvm(quote, request, onSubmitted);
+      const nonce = await this.rpc.bnb.call('eth_getTransactionCount', [quote.sender, 'pending']);
+      request.nonce = Number(BigInt(nonce));
       signed = await signer.signTransaction(request); hash = keccak256(signed);
     } else {
-      const transaction = this.decodeSolana(quote.tx.data);
+      let transaction = this.decodeSolana(quote.tx.data);
       blockhash = transaction.message.recentBlockhash;
-      transaction.sign([signer]); signed = Buffer.from(transaction.serialize()).toString('base64'); hash = bs58.encode(transaction.signatures[0]);
+      if (browser) {
+        // A quote is consumed before asking the extension. A rejected, lost or
+        // timed-out popup must never cause an automatic signing retry.
+        this.used.add(quote.id);
+        const result = await this.browserWallets.request('solana', { kind: 'solSign', quoteId: quote.id, expiresAt: quote.expiresAt,
+          payload: { transactionBase64: Buffer.from(transaction.serialize()).toString('base64'), sender: quote.sender },
+          summary: { kind: quote.kind, amountInRaw: quote.amountInRaw, fromToken: quote.fromToken.address, toToken: quote.toToken.address } });
+        transaction = validateBrowserSolanaSignature(result?.signedTransactionBase64, transaction, quote.sender);
+        if (Date.parse(quote.expiresAt) <= Date.now()) throw new AdapterError('插件签名期间报价已过期，未广播交易，请重新报价');
+        balances = await this.balances('solana');
+        if (decimal(balances.native).minus(fee.solFee).lt(reserve)) throw new AdapterError('签名后原生币余额变化，Gas 储备不足，未广播交易');
+      } else transaction.sign([signer]);
+      signed = Buffer.from(transaction.serialize()).toString('base64'); hash = bs58.encode(transaction.signatures[0]);
       const owned = (await this.rpc.solana.call('getTokenAccountsByOwner', [quote.sender, { programId: TOKEN_PROGRAMS[0] }, { encoding: 'base64', commitment: 'confirmed' }])).value ?? [];
       const addresses = owned.map(a => a.pubkey), beforeAccounts = owned.map(a => a.account);
       if (quote.kind === 'swap') {
@@ -365,6 +413,7 @@ export class LiveAdapter {
       const debit = Math.max(0, Number(balances.nativeRaw) - Number(postLamports)) / 1e9;
       if (debit > c.risk.maxSolFee || Number(postLamports) / 1e9 < c.risk.reserveSol) throw new AdapterError('Solana 模拟网络费与租金总扣款超过限制或 Gas 储备不足');
       validateSolanaSimulationTokens({ quote, beforeAccounts, afterAccounts: simulation.value.accounts.slice(1) });
+      if (browser && Date.parse(quote.expiresAt) <= Date.now()) throw new AdapterError('插件签名及模拟期间报价已过期，未广播交易，请重新报价');
     }
     const submission = { id: randomUUID(), quote, chain: quote.fromChain, hash, blockhash, submittedAt: new Date().toISOString(), broadcastState: 'prepared' };
     this.used.add(quote.id);
@@ -379,6 +428,28 @@ export class LiveAdapter {
       if (returned !== hash) throw new AdapterError('Solana RPC 返回签名不一致，必须人工核对');
     }
     submission.broadcastState = 'sent'; return submission;
+  }
+  async submitBrowserEvm(quote, request, onSubmitted) {
+    const transaction = { from: quote.sender, to: request.to, data: request.data,
+      value: `0x${request.value.toString(16)}`, gas: `0x${request.gasLimit.toString(16)}`, gasPrice: `0x${request.gasPrice.toString(16)}`, chainId: '0x38' };
+    this.used.add(quote.id);
+    const result = await this.browserWallets.request('bnb', { kind: 'evmSend', quoteId: quote.id, expiresAt: quote.expiresAt, payload: { transaction },
+      summary: { kind: quote.kind, amountInRaw: quote.amountInRaw, fromToken: quote.fromToken.address, toToken: quote.toToken.address } });
+    if (!/^0x[0-9a-fA-F]{64}$/.test(result?.hash ?? '')) throw new AdapterError('插件未返回有效交易哈希，交易结果不确定，请人工核对');
+    const hash = result.hash;
+    const submission = { id: randomUUID(), quote, chain: 'bnb', hash, submittedAt: new Date().toISOString(), broadcastState: 'sent', signer: 'browser' };
+    // eth_sendTransaction broadcasts in the extension. Persist its returned
+    // hash immediately, and never broadcast the same transaction server-side.
+    try {
+      await onSubmitted(json(submission));
+      const deadline = Date.now() + this.browserTransactionTimeoutMs;
+      while (Date.now() < deadline) {
+        const published = await this.rpc.bnb.call('eth_getTransactionByHash', [hash]);
+        if (published) { verifyPublishedEvmTransaction(transaction, published, hash); return submission; }
+        await sleep(Math.min(250, Math.max(1, deadline - Date.now())));
+      }
+      throw new AdapterError('RPC 暂未找到插件已发送的 BNB 交易，结果不确定，请核对哈希，禁止重发');
+    } catch (error) { error.hash = hash; error.sourceHash = hash; throw error; }
   }
   async assertAllowance(quote) {
     let spender;

@@ -19,27 +19,55 @@ function parseKey(chain,secret){
   }catch{throw safeError(chain==='bnb'?'BNB 私钥格式无效':'Solana 私钥须为64字节 Base58 或 JSON 数组');}
 }
 function checkChain(chain){if(!['bnb','solana'].includes(chain))throw safeError('链名称无效');}
+export function normalizeWalletAddress(chain,address){
+  checkChain(chain);if(typeof address!=='string')throw safeError('钱包地址格式无效');
+  try{return chain==='bnb'?getAddress(address.trim()):new PublicKey(address.trim()).toBase58();}catch{throw safeError('钱包地址格式无效');}
+}
 export class Vault {
-  constructor(dataDir){
+  constructor(dataDir,{browserWallets}={}){
     mkdirSync(dataDir,{recursive:true,mode:0o700});chmodSync(dataDir,0o700);
     this.file=path.join(dataDir,'vault.json');this.publicFile=path.join(dataDir,'wallets.json');
     this.public=readJson(this.publicFile,{bnb:null,solana:null,okxConfigured:false});
+    this.public.localProfiles??={};this.browserWallets=browserWallets;
     this.payload=null;this.key=null;this.salt=null;
   }
-  publicStatus(){const out={};for(const chain of ['bnb','solana']){const w=this.public[chain];out[chain]=w?{address:w.address,mode:w.mode,unlocked:w.mode==='private'&&!!this.payload,canSign:w.mode==='private'&&!!this.payload,locked:w.mode==='private'&&!this.payload}:{address:null,mode:'none',unlocked:false,canSign:false,locked:false};}out.okxConfigured=!!this.public.okxConfigured;out.locked=existsSync(this.file)&&!this.payload;out.unlocked=!!this.payload;return out;}
+  publicStatus(){
+    const out={};
+    for(const chain of ['bnb','solana']){
+      const w=this.public[chain];const local=this.public.localProfiles[chain];
+      if(w?.mode==='browser'){
+        const status=this.browserWallets?.status(chain);
+        const same=status?.address&&(chain==='bnb'?status.address.toLowerCase()===w.address.toLowerCase():status.address===w.address);
+        const connected=Boolean(status?.connected&&same&&status.provider===w.provider);
+        out[chain]={address:w.address,mode:'browser',provider:w.provider,connected,unlocked:connected,canSign:connected,locked:false,hasLocalProfile:!!local,hasLocalWallet:!!local,localAddress:local?.address??null};
+      }else out[chain]=w?{address:w.address,mode:w.mode,unlocked:w.mode==='private'&&!!this.payload,canSign:w.mode==='private'&&!!this.payload,locked:w.mode==='private'&&!this.payload}:{address:null,mode:'none',unlocked:false,canSign:false,locked:false};
+    }
+    out.okxConfigured=!!this.public.okxConfigured;out.locked=existsSync(this.file)&&!this.payload;out.unlocked=!!this.payload;return out;
+  }
   #password(password){if(typeof password!=='string'||password.length<10||password.length>1024)throw safeError('密码长度须为10–1024个字符');}
   #openOrCreate(password){this.#password(password);if(this.payload){if(password){const k=scryptSync(password,this.salt,32,OPTIONS);if(!k.equals(this.key)){k.fill(0);throw safeError('密码不正确');}k.fill(0);}return;}if(existsSync(this.file)){this.unlock(password);return;}this.salt=randomBytes(16);this.key=scryptSync(password,this.salt,32,OPTIONS);this.payload={wallets:{},okx:null};}
   #save(){if(!this.payload||!this.key)throw safeError('请先解锁钱包');const iv=randomBytes(12);const cipher=createCipheriv('aes-256-gcm',this.key,iv);cipher.setAAD(Buffer.from('dualarb-vault-v1'));const encrypted=Buffer.concat([cipher.update(JSON.stringify(this.payload),'utf8'),cipher.final()]);atomic(this.file,{version:1,kdf:'scrypt',N:32768,r:8,p:1,salt:this.salt.toString('base64'),iv:iv.toString('base64'),tag:cipher.getAuthTag().toString('base64'),ciphertext:encrypted.toString('base64')});atomic(this.publicFile,this.public);}
   unlock(password){
     this.#password(password);if(!existsSync(this.file))throw safeError('尚未创建加密钱包');
     const record=readJson(this.file,null);let key;
-    try{if(record.version!==1||record.kdf!=='scrypt')throw Error();const salt=Buffer.from(record.salt,'base64');if(salt.length!==16)throw Error();key=scryptSync(password,salt,32,OPTIONS);const decipher=createDecipheriv('aes-256-gcm',key,Buffer.from(record.iv,'base64'));decipher.setAAD(Buffer.from('dualarb-vault-v1'));decipher.setAuthTag(Buffer.from(record.tag,'base64'));const decoded=Buffer.concat([decipher.update(Buffer.from(record.ciphertext,'base64')),decipher.final()]);const payload=JSON.parse(decoded.toString('utf8'));decoded.fill(0);if(!payload.wallets)throw Error();this.lock();this.key=key;this.salt=salt;this.payload=payload;for(const chain of ['bnb','solana'])if(this.public[chain]?.mode!=='private')delete this.payload.wallets[chain];return this.publicStatus();}catch{key?.fill(0);throw safeError('解锁失败：密码不正确或钱包文件损坏');}
+    try{if(record.version!==1||record.kdf!=='scrypt')throw Error();const salt=Buffer.from(record.salt,'base64');if(salt.length!==16)throw Error();key=scryptSync(password,salt,32,OPTIONS);const decipher=createDecipheriv('aes-256-gcm',key,Buffer.from(record.iv,'base64'));decipher.setAAD(Buffer.from('dualarb-vault-v1'));decipher.setAuthTag(Buffer.from(record.tag,'base64'));const decoded=Buffer.concat([decipher.update(Buffer.from(record.ciphertext,'base64')),decipher.final()]);const payload=JSON.parse(decoded.toString('utf8'));decoded.fill(0);if(!payload.wallets)throw Error();this.lock();this.key=key;this.salt=salt;this.payload=payload;for(const chain of ['bnb','solana'])if(this.public[chain]?.mode!=='private'&&!(this.public[chain]?.mode==='browser'&&this.public.localProfiles[chain]?.mode==='private'))delete this.payload.wallets[chain];return this.publicStatus();}catch{key?.fill(0);throw safeError('解锁失败：密码不正确或钱包文件损坏');}
   }
   lock(){this.key?.fill(0);this.key=null;this.salt=null;if(this.payload){for(const k of Object.keys(this.payload.wallets||{}))this.payload.wallets[k]='';if(this.payload.okx)for(const k of Object.keys(this.payload.okx))this.payload.okx[k]='';}this.payload=null;return this.publicStatus();}
-  importWallet({chain,mode,secret,address,password}={}){
-    checkChain(chain);if(!['private','readonly'].includes(mode))throw safeError('钱包模式无效');
-    if(mode==='readonly'){let normalized;try{normalized=chain==='bnb'?getAddress(address):new PublicKey(address).toBase58();}catch{throw safeError('只读地址格式无效');}this.public[chain]={mode,address:normalized};if(this.payload){delete this.payload.wallets[chain];this.#save();}else atomic(this.publicFile,this.public);return this.publicStatus();}
-    const parsed=parseKey(chain,secret);this.#openOrCreate(password);this.payload.wallets[chain]=parsed.secret;this.public[chain]={mode:'private',address:parsed.address};this.#save();return this.publicStatus();
+  importWallet({chain,mode,secret,address,password,provider}={}){
+    checkChain(chain);if(!['private','readonly','browser'].includes(mode))throw safeError('钱包模式无效');
+    if(mode==='browser'){
+      const allowed=chain==='bnb'?['metamask','okx']:['phantom','okx'];if(!allowed.includes(provider))throw safeError('插件钱包与链不匹配');
+      const normalized=normalizeWalletAddress(chain,address);const prior=this.public[chain];
+      if(prior&&['private','readonly'].includes(prior.mode))this.public.localProfiles[chain]={mode:prior.mode,address:prior.address};
+      this.public[chain]={mode:'browser',provider,address:normalized};atomic(this.publicFile,this.public);return this.publicStatus();
+    }
+    if(mode==='readonly'){const normalized=normalizeWalletAddress(chain,address);this.public[chain]={mode,address:normalized};this.public.localProfiles[chain]={mode,address:normalized};if(this.payload){delete this.payload.wallets[chain];this.#save();}else atomic(this.publicFile,this.public);return this.publicStatus();}
+    const parsed=parseKey(chain,secret);this.#openOrCreate(password);this.payload.wallets[chain]=parsed.secret;this.public[chain]={mode:'private',address:parsed.address};this.public.localProfiles[chain]={mode:'private',address:parsed.address};this.#save();return this.publicStatus();
+  }
+  restoreLocalWallet(chain){
+    checkChain(chain);const profile=this.public.localProfiles[chain];
+    if(this.public[chain]?.mode!=='browser'||!profile||!['private','readonly'].includes(profile.mode))throw safeError('没有可恢复的本机钱包');
+    this.public[chain]={mode:profile.mode,address:profile.address};atomic(this.publicFile,this.public);return this.publicStatus();
   }
   getPrivateKey(chain){checkChain(chain);if(!this.payload||this.public[chain]?.mode!=='private'||!this.payload.wallets[chain])throw safeError('钱包未导入私钥或尚未解锁');const secret=this.payload.wallets[chain];if(parseKey(chain,secret).address!==this.public[chain].address)throw safeError('钱包元数据不一致，请重新导入');return secret;}
   signer(chain){const key=this.getPrivateKey(chain);return chain==='bnb'?new Wallet(key):Keypair.fromSecretKey(bs58.decode(key));}

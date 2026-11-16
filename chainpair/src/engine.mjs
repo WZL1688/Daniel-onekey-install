@@ -12,9 +12,9 @@ const safeError = message => Object.assign(new Error(message), { safe: true });
 const errText = e => e?.safe ? String(e.message).replace(/https?:\/\/[^\s]+/g, '[远程服务]').slice(0, 500) : '操作失败，请检查配置及链上回执；程序已保留状态';
 const quoteFresh = q => q && Number.isFinite(Date.parse(q.expiresAt)) && Date.parse(q.expiresAt) > Date.now();
 export class Engine {
-  constructor({ store, vault, adapterFactory, phaseDelayMs = 0 }) {
+  constructor({ store, vault, browserWallets, adapterFactory, phaseDelayMs = 0 }) {
     this.store = store; this.vault = vault; this.config = store.config;
-    this.adapterFactory = adapterFactory; this.phaseDelayMs = phaseDelayMs;
+    this.adapterFactory = adapterFactory; this.phaseDelayMs = phaseDelayMs; this.browserWallets = browserWallets;
     this.market = {}; this.balances = {}; this.opportunity = null; this.plan = null;
     this.running = false; this.busy = false; this.refreshing = false; this.activeTradeId = null;
     this.configuring = false; this.configRevision = 0; this.quoteBuilders = 0;
@@ -33,7 +33,7 @@ export class Engine {
     this.schedule(); return this;
   }
   async makeAdapter() {
-    const args = { getConfig: () => this.config, store: this.store, vault: this.vault };
+    const args = { getConfig: () => this.config, store: this.store, vault: this.vault, browserWallets: this.browserWallets };
     if (this.adapterFactory) this.adapter = await this.adapterFactory(args);
     else if (this.config.mode === 'demo') this.adapter = new DemoAdapter(args);
     else { const { LiveAdapter } = await import('./adapters/live.mjs'); this.adapter = new LiveAdapter(args); }
@@ -68,13 +68,24 @@ export class Engine {
     const c = this.config.chains[chain];
     return { address: c[kind === 'stable' ? 'stableAddress' : 'tokenAddress'] || `demo-${chain}-${kind}`, decimals: c[kind === 'stable' ? 'stableDecimals' : 'tokenDecimals'], kind };
   }
+  walletChanged(chain) {
+    this.running = false; this.configRevision++; this.plan = null; this.bridgeQuotes.clear();
+    if (chain) delete this.balances[chain]; else this.balances = {};
+    this.opportunity = { executable: false, amountUsd: this.config.risk.amountUsd, reasons: ['钱包状态已变化，等待余额与报价刷新'], quotedAt: now() };
+  }
   async refresh({ autoExecute = true, allowConfiguring = false } = {}) {
     if (this.refreshing || this.busy || (this.configuring && !allowConfiguring)) return this.snapshot();
+    const revision = this.configRevision;
     this.refreshing = true;
     try {
-      await this.loadMarketBalances();
+      await this.loadMarketBalances(revision);
+      if (revision !== this.configRevision) return this.snapshot();
       await this.buildOpportunity();
-    } finally { this.refreshing = false; }
+    } finally {
+      this.refreshing = false;
+      if (revision !== this.configRevision) setImmediate(() => this.refresh({ autoExecute: false }).catch(error => { this.lastError = this.errorText(error); }));
+    }
+    if (revision !== this.configRevision) return this.snapshot();
     if (autoExecute && this.running && !this.busy && !this.pausedReason) {
       if (this.config.rebalance.enabled) {
         const request = this.rebalanceRequest();
@@ -84,9 +95,10 @@ export class Engine {
     }
     return this.snapshot();
   }
-  async loadMarketBalances() {
+  async loadMarketBalances(revision = this.configRevision) {
     const results = await Promise.allSettled(['bnb', 'solana'].map(async chain => {
       const r = await Promise.allSettled([this.adapter.market(chain), this.adapter.balances(chain)]);
+      if (revision !== this.configRevision) return;
       this.market[chain] = r[0].status === 'fulfilled' ? r[0].value : { ...this.market[chain], connected: false, error: this.errorText(r[0].reason) };
       this.balances[chain] = r[1].status === 'fulfilled' ? r[1].value : { error: this.errorText(r[1].reason), stableUsd: null, nativeBalance: null };
     }));
@@ -104,7 +116,8 @@ export class Engine {
     if (c.mode === 'live') {
       const wallets = this.vault.publicStatus();
       for (const chain of ['bnb', 'solana']) {
-        if (wallets[chain]?.mode !== 'private' || !wallets[chain]?.unlocked) reasons.push(`${chain} 钱包未解锁或为只读`);
+        const wallet = wallets[chain];
+        if (!['private', 'browser'].includes(wallet?.mode) || !wallet?.unlocked || wallet.canSign === false) reasons.push(wallet?.mode === 'browser' ? `${chain} 插件钱包未连接，请保持页面打开并重新连接` : `${chain} 钱包未解锁或为只读`);
         if (!c.chains[chain].tokenAddress && !bridge) reasons.push(`${chain} 尚未配置代币地址`);
       }
       const state = this.vault.publicStatus();
@@ -142,7 +155,7 @@ export class Engine {
     return reasons;
   }
   async buildOpportunity({ ignoreBusy = false } = {}) {
-    this.plan = null; const c = this.config;
+    this.plan = null; const c = this.config; const revision = this.configRevision;
     const prices = ['bnb', 'solana'].map(ch => this.market[ch]?.priceUsd);
     const reasons = this.baseReasons({ ignoreBusy });
     for (const chain of ['bnb', 'solana']) {
@@ -159,6 +172,7 @@ export class Engine {
       const buy = await this.adapter.quoteSwap({ chain: buyChain, fromToken: this.token(buyChain, 'stable'), toToken: this.token(buyChain), amountRaw: raw(c.risk.amountUsd, this.token(buyChain, 'stable').decimals) });
       const bridge = await this.adapter.quoteTokenBridge({ fromChain: buyChain, toChain: sellChain, fromToken: this.token(buyChain), toToken: this.token(sellChain), amountRaw: buy.minOutRaw });
       const sell = await this.adapter.quoteSwap({ chain: sellChain, fromToken: this.token(sellChain), toToken: this.token(sellChain, 'stable'), amountRaw: bridge.minOutRaw });
+      if (revision !== this.configRevision) return;
       const quotes = [buy, bridge, sell];
       const gasUsd = quotes.reduce((s, q) => s + (q.feeUsd || 0), 0);
       const conservativeProceeds = value(sell.minOutRaw, this.token(sellChain, 'stable').decimals);
@@ -172,7 +186,7 @@ export class Engine {
         expiresAt: new Date(Math.min(...quotes.map(q => Date.parse(q.expiresAt)))).toISOString(), reasons: [...new Set(reasons)], executable: reasons.length === 0,
         valuation: 'USDT/USDC 按 1 美元面值估算；原生币费用按配置参考价折算' };
       this.plan = { buy, bridge, sell, estimate: structuredClone(this.opportunity) };
-    } catch (e) { this.opportunity = { ...base, reasons: [...new Set([...reasons, this.errorText(e)])], executable: false }; }
+    } catch (e) { if (revision === this.configRevision) this.opportunity = { ...base, reasons: [...new Set([...reasons, this.errorText(e)])], executable: false }; }
   }
   start() {
     if (this.configuring) throw safeError('配置更新进行中，请稍候');

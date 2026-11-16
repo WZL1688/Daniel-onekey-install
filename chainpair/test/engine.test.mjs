@@ -223,3 +223,54 @@ test('execution guard also covers delayed market requests before any broadcast',
   await assert.rejects(engine.execute(), /执行中/);
   await execution; assert.equal(adapter.sent.length, 3);
 });
+
+test('wallet identity change discards a delayed balance response and refreshes the new account', async t => {
+  const { engine, adapter } = await setup(t);
+  const original = adapter.balances.bind(adapter);
+  let release, started;
+  const entered = new Promise(resolve => { started = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  let first = true;
+  adapter.balances = async chain => {
+    const balance = await original(chain);
+    if (chain === 'bnb' && first) { first = false; started(); await gate; return { ...balance, address: 'old-account' }; }
+    return { ...balance, address: 'new-account' };
+  };
+  const refresh = engine.refresh({ autoExecute: false });
+  await entered;
+  engine.walletChanged('bnb');
+  assert.equal(engine.running, false);
+  assert.equal(engine.plan, null);
+  assert.equal(engine.balances.bnb, undefined);
+  release(); await refresh;
+  assert.notEqual(engine.balances.bnb?.address, 'old-account');
+  for (let i = 0; i < 30 && engine.balances.bnb?.address !== 'new-account'; i++) await pause(2);
+  assert.equal(engine.balances.bnb.address, 'new-account');
+  while (engine.refreshing) await pause(2);
+});
+
+test('changing a wallet invalidates a pending cross-chain quote without blocking the account switch', async t => {
+  const { engine, adapter } = await setup(t);
+  adapter.options.bridgeDelay = 20;
+  const pending = engine.quoteBridge({ fromChain: 'bnb', toChain: 'solana', amountUsd: 5 });
+  const revision = engine.configRevision;
+  engine.walletChanged('solana');
+  assert.equal(engine.configRevision, revision + 1);
+  await assert.rejects(pending, /配置已变化/);
+  assert.equal(engine.bridgeQuotes.size, 0);
+  assert.equal(adapter.sent.length, 0);
+});
+
+test('live mode accepts connected browser signers and blocks stale browser or readonly accounts', async t => {
+  const { engine } = await setup(t);
+  engine.config.mode = 'live';
+  engine.config.chains.bnb.tokenAddress = '0x1111111111111111111111111111111111111111';
+  engine.config.chains.solana.tokenAddress = '11111111111111111111111111111111';
+  let online = true;
+  engine.vault.publicStatus = () => ({ bnb: { mode: 'browser', unlocked: online, canSign: online }, solana: { mode: 'browser', unlocked: true, canSign: true }, okxConfigured: true, locked: false });
+  assert.equal(engine.baseReasons().length, 0);
+  online = false;
+  assert(engine.baseReasons().some(reason => /插件钱包未连接/.test(reason)));
+  engine.vault.publicStatus = () => ({ bnb: { mode: 'readonly', unlocked: false, canSign: false }, solana: { mode: 'browser', unlocked: true, canSign: true }, okxConfigured: true, locked: false });
+  assert(engine.baseReasons().some(reason => /只读/.test(reason)));
+});
