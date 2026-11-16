@@ -5,6 +5,7 @@ import { Store } from './store.mjs';
 import { Vault } from './vault.mjs';
 import { Engine } from './engine.mjs';
 import { startLocalServer } from './server.mjs';
+import { openBrowser } from './browser.mjs';
 
 const major = Number(process.versions.node.split('.')[0]);
 if (major < 24) throw new Error('请安装 Node.js 24 LTS 或更新版本');
@@ -17,6 +18,11 @@ const engine = new Engine({ store, vault });
 await engine.init();
 const { server, url } = await startLocalServer({ engine, store, vault });
 console.log(`\n双链套利工作台已启动\n本机地址：${url}\n数据目录：${dataDir}\n模式：${engine.config.mode === 'demo' ? '演示（不会广播链上交易）' : '实盘（保险库需重新解锁）'}\n按 Ctrl+C 退出。\n`);
+console.log('浏览器地址必须包含端口号；请使用上面显示的完整本机地址。');
+if (process.argv.includes('--open') && !process.argv.includes('--no-open')) {
+  const requested = await openBrowser(url);
+  console.log(requested ? `已请求默认浏览器打开：${url}/` : `无法自动打开浏览器，请手动打开：${url}/`);
+}
 let closing = false;
 async function shutdown() {
   if (closing) return; closing = true; engine.stop();

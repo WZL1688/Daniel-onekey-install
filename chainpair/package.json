@@ -8,7 +8,8 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "start": "node src/main.mjs",
+    "start": "node src/main.mjs --open",
+    "start:server": "node src/main.mjs",
     "test": "node --test test/*.test.mjs",
     "check": "node --check src/main.mjs && node --check public/app.js",
     "test:ui": "node test/browser-smoke.mjs"
