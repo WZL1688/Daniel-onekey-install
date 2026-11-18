@@ -1,6 +1,6 @@
 {
   "name": "dualchain-local-arbitrage",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "description": "Local BNB Chain and Solana sequential arbitrage workstation",
@@ -11,9 +11,10 @@
     "start": "node src/main.mjs --open",
     "start:server": "node src/main.mjs",
     "test": "node --test test/*.test.mjs",
-    "check": "node --check src/main.mjs && node --check src/browser-wallets.mjs && node --check public/app.js && node --check public/wallet-connect.js",
+    "check": "node --check src/main.mjs && node --check src/browser-wallets.mjs && node --check src/policy.mjs && node --check src/review.mjs && node --check public/app.js && node --check public/wallet-connect.js",
     "test:ui": "node test/browser-smoke.mjs",
-    "test:wallet-ui": "node test/wallet-ui-smoke.mjs"
+    "test:wallet-ui": "node test/wallet-ui-smoke.mjs",
+    "test:review-ui": "node test/review-ui-smoke.mjs"
   },
   "dependencies": {
     "@solana/web3.js": "^1.98.4",

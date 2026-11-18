@@ -67,7 +67,8 @@ export class BrowserWalletBridge {
   disconnectAll() { for (const chain of Object.keys(CHAINS)) this.disconnectChain(chain); }
   record(request, state, extra = {}) {
     const quote = this.store?.getQuote?.(request.quoteId);
-    if (quote?.tradeId) this.store.appendEvent(quote.tradeId, { state, requestId: request.id, quoteId: request.quoteId, chain: request.chain, kind: request.kind, at: new Date(this.clock()).toISOString(), ...extra });
+    if (quote?.tradeId) this.store.appendEvent(quote.tradeId, { state, requestId: request.id, quoteId: request.quoteId, chain: request.chain, kind: request.kind,
+      ...(quote.policyFingerprint ? { policyFingerprint: quote.policyFingerprint } : {}), at: new Date(this.clock()).toISOString(), ...extra });
     return quote?.tradeId;
   }
   request(chain, input) {

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import Decimal from 'decimal.js';
 import { DemoAdapter } from './adapters/demo.mjs';
 import { validateConfig } from './config.mjs';
+import { policyRecord, createPolicySnapshot, policyFingerprint, assertPolicyUnchanged, assertQuoteIntent, intentForLeg, swapIntent, bridgeIntent, positiveRaw } from './policy.mjs';
 
 const now = () => new Date().toISOString();
 const value = (n, d) => new Decimal(n || 0).div(new Decimal(10).pow(d)).toNumber();
@@ -47,7 +48,7 @@ export class Engine {
   snapshot() {
     const wallets = this.vault.publicStatus();
     const reviewTradeId = this.store.allTrades().find(trade => trade.status === 'NEEDS_REVIEW')?.id || null;
-    return { config: this.config, market: this.market, balances: this.balances, opportunity: this.opportunity,
+    return { config: this.config, policyFingerprint: policyFingerprint(createPolicySnapshot(this.config)), market: this.market, balances: this.balances, opportunity: this.opportunity,
       engine: { running: this.running, busy: this.busy, configuring: this.configuring, pausedReason: this.pausedReason, activeTradeId: this.activeTradeId, reviewTradeId, lastError: this.lastError, mode: this.config.mode },
       wallets, stats: this.store.stats(), okxConfigured: Boolean(wallets.okxConfigured),
       rebalance: { lastAt: this.store.getMeta('lastRebalanceAt') || null, triggerUsd: 5, targetShare: .6 }, serverTime: now() };
@@ -67,6 +68,9 @@ export class Engine {
   token(chain, kind = 'token') {
     const c = this.config.chains[chain];
     return { address: c[kind === 'stable' ? 'stableAddress' : 'tokenAddress'] || `demo-${chain}-${kind}`, decimals: c[kind === 'stable' ? 'stableDecimals' : 'tokenDecimals'], kind };
+  }
+  validateIntent(quote, expected, policy = createPolicySnapshot(this.config)) {
+    return assertQuoteIntent(quote, expected, { policy, wallets: this.vault.publicStatus() });
   }
   walletChanged(chain) {
     this.running = false; this.configRevision++; this.plan = null; this.bridgeQuotes.clear();
@@ -169,12 +173,18 @@ export class Engine {
     const base = { buyChain, sellChain, amountUsd: c.risk.amountUsd, spreadBps: (this.market[sellChain].priceUsd / this.market[buyChain].priceUsd - 1) * 10000, quotedAt: now() };
     if (!finite(this.balances[buyChain]?.stableUsd) || this.balances[buyChain].stableUsd < c.risk.amountUsd) reasons.push('低价链可用稳定币不足');
     try {
-      const buy = await this.adapter.quoteSwap({ chain: buyChain, fromToken: this.token(buyChain, 'stable'), toToken: this.token(buyChain), amountRaw: raw(c.risk.amountUsd, this.token(buyChain, 'stable').decimals) });
-      const bridge = await this.adapter.quoteTokenBridge({ fromChain: buyChain, toChain: sellChain, fromToken: this.token(buyChain), toToken: this.token(sellChain), amountRaw: buy.minOutRaw });
-      const sell = await this.adapter.quoteSwap({ chain: sellChain, fromToken: this.token(sellChain), toToken: this.token(sellChain, 'stable'), amountRaw: bridge.minOutRaw });
+      const buyIntent = swapIntent(buyChain, this.token(buyChain, 'stable'), this.token(buyChain), raw(c.risk.amountUsd, this.token(buyChain, 'stable').decimals));
+      const buy = await this.adapter.quoteSwap({ chain: buyChain, fromToken: buyIntent.fromToken, toToken: buyIntent.toToken, amountRaw: buyIntent.amountInRaw });
+      this.validateIntent(buy, buyIntent);
+      const nextBridgeIntent = bridgeIntent(buyChain, sellChain, this.token(buyChain), this.token(sellChain), buy.minOutRaw);
+      const bridge = await this.adapter.quoteTokenBridge({ fromChain: buyChain, toChain: sellChain, fromToken: nextBridgeIntent.fromToken, toToken: nextBridgeIntent.toToken, amountRaw: nextBridgeIntent.amountInRaw });
+      this.validateIntent(bridge, nextBridgeIntent);
+      const sellIntent = swapIntent(sellChain, this.token(sellChain), this.token(sellChain, 'stable'), bridge.minOutRaw);
+      const sell = await this.adapter.quoteSwap({ chain: sellChain, fromToken: sellIntent.fromToken, toToken: sellIntent.toToken, amountRaw: sellIntent.amountInRaw });
+      this.validateIntent(sell, sellIntent);
       if (revision !== this.configRevision) return;
       const quotes = [buy, bridge, sell];
-      const gasUsd = quotes.reduce((s, q) => s + (q.feeUsd || 0), 0);
+      const gasUsd = quotes.reduce((s, q) => s + q.feeUsd, 0);
       const conservativeProceeds = value(sell.minOutRaw, this.token(sellChain, 'stable').decimals);
       const expectedProceeds = value(sell.amountOutRaw, this.token(sellChain, 'stable').decimals);
       const netProfitUsd = conservativeProceeds - c.risk.amountUsd - gasUsd;
@@ -196,18 +206,22 @@ export class Engine {
   pause(reason = '已手动暂停新交易；在途交易将继续完成并归档') { this.running = false; this.lastError = reason; return this.snapshot(); }
   event(trade, status, extra = {}) {
     Object.assign(trade, extra, { status, updatedAt: now() });
-    this.store.saveTrade(trade); this.store.appendEvent(trade.id, { state: status, status, at: now(), ...extra });
+    this.store.saveTrade(trade); this.store.appendEvent(trade.id, { state: status, status, at: now(), ...(trade.policyFingerprint ? { policyFingerprint: trade.policyFingerprint } : {}), ...extra });
   }
   newTrade(type, data) {
-    const trade = { id: randomUUID(), type, mode: this.config.mode, status: 'QUOTED', createdAt: now(), updatedAt: now(), legs: [], valuation: { bnbUsd: this.config.chains.bnb.nativeUsd, solUsd: this.config.chains.solana.nativeUsd, stableUsd: 1 }, ...data };
+    const trade = { id: randomUUID(), type, mode: this.config.mode, status: 'QUOTED', createdAt: now(), updatedAt: now(), legs: [], valuation: { bnbUsd: this.config.chains.bnb.nativeUsd, solUsd: this.config.chains.solana.nativeUsd, stableUsd: 1 }, ...data, ...policyRecord(this.config) };
     this.store.saveTrade(trade); this.event(trade, 'QUOTED', { estimate: data.estimate }); return trade;
   }
   async runLeg(trade, name, quote) {
-    if (!quoteFresh(quote)) throw safeError(`${name}报价已过期`);
-    if (!/^\d+$/.test(String(quote.amountInRaw)) || new Decimal(quote.amountInRaw).lte(0)) throw safeError('交易数量无效');
+    assertPolicyUnchanged(trade, this.config);
+    const expected = intentForLeg(trade, name);
+    this.validateIntent(quote, expected, trade.policySnapshot);
     for (const chain of ['bnb', 'solana']) this.balances[chain] = await this.adapter.balances(chain);
     const feeReasons = this.checkFees([quote], { trade }); if (feeReasons.length) throw safeError(feeReasons.join('；'));
-    this.store.saveQuote({ ...quote, tradeId: trade.id, leg: name, capturedAt: now() });
+    // Recheck after asynchronous balance reads, before any durable broadcast intent.
+    assertPolicyUnchanged(trade, this.config);
+    this.validateIntent(quote, expected, trade.policySnapshot);
+    this.store.saveQuote({ ...quote, tradeId: trade.id, leg: name, capturedAt: now(), policyFingerprint: trade.policyFingerprint });
     // Durable intent is committed before any provider broadcast. Never automatically replay it.
     this.event(trade, `${name}_SUBMITTING`, { pendingQuoteId: quote.id });
     let submission;
@@ -223,11 +237,14 @@ export class Engine {
     this.event(trade, `${name}_RECEIPT`, { legs: trade.legs });
     if (receipt.confirmed !== true || !/^\d+$/.test(String(receipt.receivedRaw)) || new Decimal(receipt.receivedRaw).lte(0)) throw safeError(`${name}尚未确认或实际到账数量不可核验`);
     if (receipt.hash !== submission.hash) throw safeError(`${name}回执交易哈希不匹配`);
+    positiveRaw(receipt.receivedRaw, quote.toChain, '实际到账数量');
+    positiveRaw(receipt.spentRaw, quote.fromChain, '实际花费数量');
     if (!/^\d+$/.test(String(receipt.spentRaw)) || !new Decimal(receipt.spentRaw).eq(quote.amountInRaw)) throw safeError(`${name}实际花费与报价数量不一致，请人工核对退款或部分成交`);
     if (!finite(receipt.feeUsd) || receipt.feeUsd < 0 || !finite(receipt.rentUsd) || receipt.rentUsd < 0 || !receipt.feesNative || typeof receipt.feesNative !== 'object' || Array.isArray(receipt.feesNative) || !finite(receipt.feesNative[quote.fromChain]) || Object.entries(receipt.feesNative).some(([chain, amount]) => !['bnb', 'solana'].includes(chain) || !finite(amount) || amount < 0)) throw safeError(`${name}回执费用或租金不可核验`);
     if (new Decimal(receipt.receivedRaw).lt(quote.minOutRaw)) throw safeError(`${name}实际到账低于最小到账数量，请人工核对`);
     Object.assign(logged, { status: 'CONFIRMED' });
     this.event(trade, `${name}_CONFIRMED`, { legs: trade.legs });
+    assertPolicyUnchanged(trade, this.config);
     this.balances[quote.fromChain] = await this.adapter.balances(quote.fromChain);
     if (quote.toChain !== quote.fromChain) this.balances[quote.toChain] = await this.adapter.balances(quote.toChain);
     const actualFeeReasons = this.checkFees([], { trade });
@@ -317,6 +334,7 @@ export class Engine {
     const reasons = this.baseReasons({ bridge: true });
     const fromToken = this.token(fromChain, 'stable'), toToken = this.token(toChain, 'stable');
     let quote = await this.adapter.quoteTokenBridge({ fromChain, toChain, fromToken, toToken, amountRaw: raw(amountUsd, fromToken.decimals) });
+    this.validateIntent(quote, bridgeIntent(fromChain, toChain, fromToken, toToken, raw(amountUsd, fromToken.decimals)));
     let receivedUsd = value(quote.minOutRaw, toToken.decimals), wearUsd = Math.max(0, amountUsd - receivedUsd) + quote.feeUsd;
     if (purpose === 'rebalance') {
       const valid = this.rebalanceRequest();
@@ -331,6 +349,7 @@ export class Engine {
           if (Math.abs(targetAmount - amountUsd) < .00001) break;
           amountUsd = targetAmount;
           quote = await this.adapter.quoteTokenBridge({ fromChain, toChain, fromToken, toToken, amountRaw: raw(amountUsd, fromToken.decimals) });
+          this.validateIntent(quote, bridgeIntent(fromChain, toChain, fromToken, toToken, raw(amountUsd, fromToken.decimals)));
           receivedUsd = value(quote.minOutRaw, toToken.decimals); wearUsd = Math.max(0, amountUsd - receivedUsd) + quote.feeUsd;
         }
         if (this.balances[fromChain].stableUsd - amountUsd < 5) reasons.push('再平衡后资金来源侧将低于5U，已阻止反复跨链');
@@ -342,7 +361,8 @@ export class Engine {
     if (!finite(wearUsd) || wearUsd > this.config.rebalance.maxWearUsd) reasons.push('美元磨损超过限制');
     if (!finite(wearBps) || wearBps > this.config.rebalance.maxWearBps) reasons.push('磨损率超过限制');
     if (revision !== this.configRevision || this.configuring) throw safeError('配置已变化，请重新获取跨链报价');
-    const result = { id: randomUUID(), configRevision: revision, fromChain, toChain, amountUsd, purpose, receivedUsd, wearUsd, wearBps, gasUsd: quote.feeUsd, expiresAt: quote.expiresAt, reasons: [...new Set(reasons)], executable: reasons.length === 0, quote };
+    const netProfitUsd = new Decimal(receivedUsd).minus(amountUsd).minus(quote.feeUsd).toNumber();
+    const result = { id: randomUUID(), configRevision: revision, policyFingerprint: policyFingerprint(createPolicySnapshot(this.config)), fromChain, toChain, amountUsd, purpose, receivedUsd, wearUsd, wearBps, netProfitUsd, gasUsd: quote.feeUsd, expiresAt: quote.expiresAt, reasons: [...new Set(reasons)], executable: reasons.length === 0, quote };
     this.bridgeQuotes.set(result.id, result); this.store.saveQuote({ ...result, kind: 'bridge-preview', capturedAt: now() });
     while (this.bridgeQuotes.size > 100) this.bridgeQuotes.delete(this.bridgeQuotes.keys().next().value);
     return result;
@@ -353,6 +373,7 @@ export class Engine {
     const preview = this.bridgeQuotes.get(quoteId);
     if (!preview || !quoteFresh(preview)) throw safeError('跨链报价不存在或已过期，请重新报价');
     if (preview.configRevision !== this.configRevision) throw safeError('配置已变化，请重新获取跨链报价');
+    if (preview.policyFingerprint !== policyFingerprint(createPolicySnapshot(this.config))) throw safeError('风控或资产配置已变化，请重新获取跨链报价');
     if (!preview.executable) throw safeError(preview.reasons.join('；'));
     const reasons = this.baseReasons({ bridge: true }); if (reasons.length) throw safeError(reasons.join('；'));
     if (preview.purpose === 'rebalance' && !this.rebalanceRequest()) throw safeError('再平衡条件已变化');
@@ -369,7 +390,9 @@ export class Engine {
       const receivedUsd = value(received.receivedRaw, this.token(preview.toChain, 'stable').decimals);
       const spentUsd = value(received.spentRaw, this.token(preview.fromChain, 'stable').decimals);
       const actualWear = Math.max(0, spentUsd - receivedUsd) + received.feeUsd + received.rentUsd;
-      const actual = { receivedUsd, spentUsd, gasUsd: received.feeUsd, rentUsd: received.rentUsd, wearUsd: actualWear, wearBps: actualWear / spentUsd * 10000, differenceUsd: actualWear - preview.wearUsd, feesNative: received.feesNative, profitUsd: -actualWear };
+      const profitUsd = receivedUsd - spentUsd - received.feeUsd - received.rentUsd;
+      const actual = { receivedUsd, spentUsd, gasUsd: received.feeUsd, rentUsd: received.rentUsd, wearUsd: actualWear, wearBps: actualWear / spentUsd * 10000,
+        differenceUsd: new Decimal(profitUsd).minus(preview.netProfitUsd).toNumber(), wearDifferenceUsd: actualWear - preview.wearUsd, feesNative: received.feesNative, profitUsd };
       if (actualWear > this.config.rebalance.maxWearUsd || actual.wearBps > this.config.rebalance.maxWearBps) throw safeError('实际磨损超过限制，资金已到账，请核对交易');
       this.event(trade, 'COMPLETED', { actual });
       if (preview.purpose === 'rebalance') { this.store.setMeta('lastRebalanceAt', now()); this.store.setMeta('rebalanceArmed', false); }

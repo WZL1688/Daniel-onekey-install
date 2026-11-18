@@ -8,7 +8,7 @@ const isEqual=(a,b)=>{if(typeof a!=='string'||typeof b!=='string')return false;c
 const safe=(message)=>Object.assign(new Error(message),{safe:true});
 const asyncRoute=(handler)=>(req,res,next)=>Promise.resolve(handler(req,res)).catch(next);
 const cookieValue=(raw,name)=>{for(const cookie of (raw||'').split(';')){const i=cookie.indexOf('=');if(cookie.slice(0,i).trim()===name)return cookie.slice(i+1).trim();}return '';};
-export function createApp({engine,store,vault,browserWallets,publicDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../public')}={}){
+export function createApp({engine,store,vault,browserWallets,reviewService,publicDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../public')}={}){
   const app=express();app.disable('x-powered-by');
   const busy=()=>engine.busy||engine.snapshot()?.engine?.busy;
   let changingWallet=false;
@@ -25,6 +25,13 @@ export function createApp({engine,store,vault,browserWallets,publicDir=path.reso
   };
   const broker=()=>{if(!browserWallets)throw safe('插件钱包连接服务未启用，请更新并重启程序');return browserWallets;};
   const clientId=(value)=>{if(typeof value!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value))throw safe('插件钱包页面标识无效，请刷新后重试');return value;};
+  const reviewQuery=(query)=>{
+    const out={};
+    if(query.mode!==undefined){if(typeof query.mode!=='string'||!['demo','live'].includes(query.mode))throw safe('复盘模式无效');out.mode=query.mode;}
+    if(query.day!==undefined){const day=query.day;if(typeof day!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(day)||!Number.isFinite(Date.parse(`${day}T00:00:00Z`))||new Date(`${day}T00:00:00Z`).toISOString().slice(0,10)!==day)throw safe('复盘日期无效，请使用 YYYY-MM-DD');out.day=day;}
+    return out;
+  };
+  const reviews=()=>{if(!reviewService)throw safe('本地复盘服务未启用，请更新并重启程序');return reviewService;};
   const session=randomBytes(32).toString('hex');const csrfToken=randomBytes(32).toString('hex');
   const sessionCookie=`dualarb_session=${session}; HttpOnly; SameSite=Strict; Path=/`;
   app.use((req,res,next)=>{
@@ -56,6 +63,19 @@ export function createApp({engine,store,vault,browserWallets,publicDir=path.reso
   app.post('/api/refresh',asyncRoute(async(req,res)=>{await engine.refresh();res.json(await engine.snapshot());}));
   app.get('/api/trades',(req,res)=>res.json(store.listTrades(req.query.page,req.query.pageSize)));
   app.get('/api/trades/:id',(req,res)=>{const trade=store.getTrade(req.params.id);if(!trade)return res.status(404).json({error:'交易不存在'});res.json(trade);});
+  app.get('/api/reviews/current',asyncRoute(async(req,res)=>res.json(await reviews().current(reviewQuery(req.query)))));
+  app.get('/api/reviews/export',asyncRoute(async(req,res)=>{
+    const document=await reviews().export(reviewQuery(req.query));
+    // Derive the filename from validated values only. The export has no ability
+    // to change configuration, request a signature, or send a transaction.
+    const day=/^\d{4}-\d{2}-\d{2}$/.test(document?.day)?document.day:'report';
+    const mode=['demo','live'].includes(document?.mode)?document.mode:'local';
+    res.setHeader('Content-Disposition',`attachment; filename="ChainPair-review-${mode}-${day}.json"`);
+    res.json(document);
+  }));
+  app.get('/api/reviews',asyncRoute(async(req,res)=>{
+    const query=reviewQuery(req.query);res.json(store.listReviews(req.query.page,req.query.pageSize,query.mode??engine.config?.mode??store.config?.mode??'demo'));
+  }));
   app.get('/api/notes',(req,res)=>res.json(store.listNotes(req.query.page,req.query.pageSize)));
   app.post('/api/notes',asyncRoute(async(req,res)=>res.status(201).json(store.addNote(req.body?.text??req.body?.content))));
   app.delete('/api/notes/:id',(req,res)=>{const removed=store.deleteNote(req.params.id);if(!removed)return res.status(404).json({error:'备忘录不存在'});res.json({ok:true});});

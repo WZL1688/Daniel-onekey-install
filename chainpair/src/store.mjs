@@ -15,6 +15,9 @@ function scrub(value) {
 }
 const json = (value)=>JSON.stringify(scrub(value));
 function pageArgs(page=1,pageSize=20) { return {page:Math.max(1,Number.isFinite(Number(page))?Math.floor(Number(page)):1),pageSize:Math.min(100,Math.max(1,Number.isFinite(Number(pageSize))?Math.floor(Number(pageSize)):20))}; }
+const reviewError=message=>Object.assign(new Error(message),{safe:true});
+function reviewMode(mode){if(!['demo','live'].includes(mode))throw reviewError('复盘模式无效');return mode;}
+function reviewDay(day){if(typeof day!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(day)||!Number.isFinite(Date.parse(`${day}T00:00:00Z`))||new Date(`${day}T00:00:00Z`).toISOString().slice(0,10)!==day)throw reviewError('复盘日期无效，请使用 YYYY-MM-DD');return day;}
 export class Store {
   constructor(dataDir) {
     mkdirSync(dataDir,{recursive:true,mode:0o700}); chmodSync(dataDir,0o700);
@@ -27,8 +30,10 @@ export class Store {
       CREATE TABLE IF NOT EXISTS quotes(id TEXT PRIMARY KEY,created_at TEXT NOT NULL,document TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS notes(id TEXT PRIMARY KEY,created_at TEXT NOT NULL,text TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS reservations(trade_id TEXT PRIMARY KEY,amount_usd REAL NOT NULL,created_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS daily_reviews(id TEXT PRIMARY KEY,day TEXT NOT NULL,mode TEXT NOT NULL,generated_at TEXT NOT NULL,document TEXT NOT NULL,UNIQUE(day,mode));
       CREATE INDEX IF NOT EXISTS events_trade ON events(trade_id,seq);
-      CREATE INDEX IF NOT EXISTS trades_time ON trades(created_at DESC);`);
+      CREATE INDEX IF NOT EXISTS trades_time ON trades(created_at DESC);
+      CREATE INDEX IF NOT EXISTS reviews_mode_day ON daily_reviews(mode,day DESC);`);
     if(!this.getMeta('config')) this.setConfig(DEFAULT_CONFIG);
   }
   close() {this.db.close();}
@@ -62,4 +67,26 @@ export class Store {
   addNote(text){if(typeof text!=='string'||!text.trim()||text.length>20000)throw new Error('备忘录内容须为1–20000字');const note={id:randomUUID(),createdAt:new Date().toISOString(),text:text.trim()};this.db.prepare('INSERT INTO notes(id,created_at,text) VALUES(?,?,?)').run(note.id,note.createdAt,note.text);return note;}
   listNotes(page=1,pageSize=10){const p=pageArgs(page,pageSize);const total=this.db.prepare('SELECT COUNT(*) AS n FROM notes').get().n;const items=this.db.prepare('SELECT id,created_at AS createdAt,text FROM notes ORDER BY created_at DESC,rowid DESC LIMIT ? OFFSET ?').all(p.pageSize,(p.page-1)*p.pageSize);return {...p,total,totalPages:Math.max(1,Math.ceil(total/p.pageSize)),items};}
   deleteNote(id){return this.db.prepare('DELETE FROM notes WHERE id=?').run(id).changes>0;}
+  saveReview(report){
+    if(!report||typeof report!=='object'||Array.isArray(report))throw reviewError('复盘报告格式无效');
+    const day=reviewDay(report.day),mode=reviewMode(report.mode),prior=this.getReview(day,mode);
+    const generatedAt=report.generatedAt||new Date().toISOString();
+    if(typeof generatedAt!=='string'||!Number.isFinite(Date.parse(generatedAt)))throw reviewError('复盘生成时间无效');
+    const id=prior?.id||report.id||`${mode}:${day}`;
+    if(typeof id!=='string'||!id||id.length>200)throw reviewError('复盘报告编号无效');
+    const out={...scrub(report),id,day,mode,generatedAt};
+    this.db.prepare('INSERT INTO daily_reviews(id,day,mode,generated_at,document) VALUES(?,?,?,?,?) ON CONFLICT(day,mode) DO UPDATE SET generated_at=excluded.generated_at,document=excluded.document').run(id,day,mode,generatedAt,json(out));
+    return this.getReview(day,mode);
+  }
+  getReview(day,mode=this.config?.mode||'demo'){
+    reviewDay(day);reviewMode(mode);
+    const row=this.db.prepare('SELECT document FROM daily_reviews WHERE day=? AND mode=?').get(day,mode);
+    return row?JSON.parse(row.document):null;
+  }
+  listReviews(page=1,pageSize=10,mode=this.config?.mode||'demo'){
+    reviewMode(mode);const p=pageArgs(page,pageSize);
+    const total=this.db.prepare('SELECT COUNT(*) AS n FROM daily_reviews WHERE mode=?').get(mode).n;
+    const items=this.db.prepare('SELECT document FROM daily_reviews WHERE mode=? ORDER BY day DESC,generated_at DESC LIMIT ? OFFSET ?').all(mode,p.pageSize,(p.page-1)*p.pageSize).map(row=>JSON.parse(row.document));
+    return {...p,total,totalPages:Math.max(1,Math.ceil(total/p.pageSize)),items};
+  }
 }
