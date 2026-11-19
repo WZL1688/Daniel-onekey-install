@@ -1,17 +1,17 @@
-# 中小币候选池下载版
+# 现货量价观察下载版（2026-11-19）
 
-已有安装：[升级补丁 ZIP](https://github.com/WZL1688/Daniel-onekey-install/raw/refs/heads/spot-arbitrage-delivery-20261103/downloads/spot-arbitrage-candidate-patch-20261106.zip)。全新安装：[完整 ZIP](https://github.com/WZL1688/Daniel-onekey-install/raw/refs/heads/spot-arbitrage-delivery-20261103/downloads/spot-arbitrage-candidate-pool-20261106.zip)。
+已有安装：[升级补丁 ZIP](https://github.com/WZL1688/Daniel-onekey-install/raw/refs/heads/spot-arbitrage-delivery-20261103/downloads/spot-arbitrage-market-watch-patch-20261119.zip)。全新安装：[完整 ZIP](https://github.com/WZL1688/Daniel-onekey-install/raw/refs/heads/spot-arbitrage-delivery-20261103/downloads/spot-arbitrage-market-watch-20261119.zip)。
 
-默认在扫描中排除BTC/ETH/SOL，支持可编辑排除名单与限定候选池、净收益/深度筛选、完整轮进度、过期及失败标记和手动加入关注。不使用真实市值，加入关注不提交交易。
+加入闭合现货K线放量、涨跌、72h位置、15m冲高回落观察及本机提醒冷却；默认关闭，在设置中启用后随候选扫描更新。未采用截图中的翻倍概率、合约OI/资金费/多空比或追涨下单；没有外部脚本源码，本次未修改那份程序。
 
-已有用户先正常停止服务、保留完整data，将补丁内容复制到现有package.json所在目录并替换同名文件，再用4-start-proxy-7897-windows.cmd启动。进入设置编辑名单，首页下方“中小币候选池”开始一轮筛选。
+正常停服、保留完整data及node_modules，把补丁内容复制到现有package.json所在目录并替换，再用4-start-proxy-7897-windows.cmd启动和刷新网页。设置启用“现货量价观察”后开始候选扫描。依赖未变，不用重新安装。
 
-310/310完整测试通过，65.250秒本地合成夹具完成3候选和22轮关注行情，完整轮询9.005秒，私人请求/订单/失败/限流均0。合成结果不代表真实小币机会或真实成交验收；原OKX后端实盘验证锁保留。
+338/338完整测试通过，本次依赖审计0个已知漏洞；本地合成夹具连续65.307秒完成两轮扫描、3次K线和9条本机提醒，同柱重复0，私人/订单/失败/限流均0。合成数据不代表真实机会或成交；原实盘验证锁、利润门槛、配额与熔断保留。
 
-[功能说明](spot-arbitrage/docs/SCANNER_CANDIDATES.md) · [本次验收](spot-arbitrage/docs/SCANNER_RELEASE_20261106.md)
+[功能与取舍说明](spot-arbitrage/docs/MARKET_WATCH.md) · [本次验收](spot-arbitrage/docs/MARKET_WATCH_RELEASE_20261119.md)
 
-补丁SHA256：`57cbd32d8df79aa02ebabba8d6a241bbedf786fdce861e568435dcbdaad782bf`（77856字节，16文件）。
+补丁SHA256：`77743cd07780ec8b0cb14d5dab1aa37ea8b0f3334e69768c24512b39ee4d7ea4`（109844字节，25文件）。
 
-完整包SHA256：`8ad7f17a9c69205b226121a28838a5ceff319f68caafeab19a13e7c3c68f9eb1`（345668字节，104文件）。
+完整包SHA256：`8ecea7f9632348629a044c298e9b8ac0dcd7dda8b3016c5d84bab50d16cf9e9c`（398372字节，118文件）。
 
-独立交付分支；main、原节点安装脚本和云环境发布不变。包不含data、真实Key、主密钥、.env或node_modules。
+仅独立交付分支，不合并main或发布云环境。不包含data、真实Key、主密钥、.env或node_modules。

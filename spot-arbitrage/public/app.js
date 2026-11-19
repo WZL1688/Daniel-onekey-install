@@ -106,6 +106,47 @@ function scannerPanel() {
   const note = `<p>按两所共同现货市场筛选，排除 ${h(excluded.join(', ') || '无')}；${included.length ? '限定候选 ' + h(included.length) + ' 对' : '候选范围为全部共同市场'}。可在设置中编辑名单，并使用有效深度及利润门槛过滤。这里没有真实流通市值数据；低单价或低成交额不代表小市值。同名交易对仍需核对为同一资产。<br>每次一对，间隔至少 10 秒，实时机会优先；实盘时暂停筛选。按有效且满足门槛的保守净利润优先排序，过期与失败结果仅作历史参考，最多显示前 50 项。加入关注只更新监控名单，不提交交易；关注最多 30 对，数量增加会延长轮询。</p>`;
   return card('中小币候选池（低优先级）', note + progress + table(['交易对 / 状态', '采样时间', '买入 → 卖出 / 试算金额', '扣费净收益 / 收益率', '限价内有效深度', '失败与试算原因', '操作'], rows, '当前候选池尚无扫描结果；请先保存排除与候选名单，再开始一轮筛选。'), `<div class="actions"><button id="scan" ${state.config.autoTrading || state.engine.busy || active ? 'disabled' : ''}>开始一轮筛选</button><button id="scan-stop" ${!active && !state.config.scannerAuto ? 'disabled' : ''}>停止筛选</button></div>`);
 }
+const marketWatchSignalNames = { VOLUME_EXPANSION: '成交额放大', FAST_MOVE: '快速涨跌', HIGH_REJECTION: '冲高回落观察' };
+function marketWatchConfig() {
+  return { enabled: false, volumeRatio: '3', priceMoveBps: '500', rejectionBps: '500', cooldownMs: 1800000, ...(state.config.marketWatch || {}) };
+}
+function marketWatchPercent(value) {
+  return value == null || value === '' || !Number.isFinite(Number(value)) ? '—' : n(Number(value) / 100) + '%';
+}
+function marketWatchView(sample) {
+  const enabled = marketWatchConfig().enabled === true && state.marketWatch?.enabled !== false;
+  if (!enabled) return { status: 'DISABLED', fresh: false, signals: [] };
+  const offset = sample.clockOffsetMs ?? 0, age = state.now + offset - sample.lastClosedAt;
+  const clockValid = Number.isFinite(offset) && Math.abs(offset) <= 30000;
+  const recent = clockValid && Number.isSafeInteger(sample.lastClosedAt) && Number.isFinite(age) && age >= 0 && age <= 360000 &&
+    Number.isSafeInteger(sample.observedAt) && sample.observedAt <= state.now;
+  const fresh = recent && ['READY', 'PARTIAL'].includes(sample.status);
+  const status = ['READY', 'PARTIAL'].includes(sample.status) && !fresh ? (clockValid ? 'STALE' : 'UNAVAILABLE') : sample.status;
+  const signals = fresh ? (sample.signals || []).filter(signal => Object.hasOwn(marketWatchSignalNames, signal.code) && signal.value != null && signal.value !== '' && Number.isFinite(Number(signal.value)) && Number.isSafeInteger(signal.at) && signal.at <= state.now + offset) : [];
+  return { status, fresh, signals };
+}
+function marketWatchSignal(signal) {
+  const value = signal.code === 'VOLUME_EXPANSION' ? n(signal.value) + ' 倍' : marketWatchPercent(signal.value);
+  return marketWatchSignalNames[signal.code] ? `${marketWatchSignalNames[signal.code]} ${value}` : '未知观察';
+}
+function marketWatchPanel() {
+  const watch = state.marketWatch || {}, enabled = marketWatchConfig().enabled === true && watch.enabled !== false;
+  const labels = { READY: '数据完整', PARTIAL: '覆盖不足', STALE: '观察已过期', UNAVAILABLE: '数据不可用', DISABLED: '观察已关闭' };
+  const samples = Object.entries(watch.samples || {}).sort(([, a], [, b]) => Number(b.observedAt || 0) - Number(a.observedAt || 0)).slice(0, 30);
+  const rows = samples.map(([id, sample]) => {
+    const view = marketWatchView(sample), historical = !view.fresh;
+    const value = x => `<span class="${historical ? 'muted' : 'number'}">${historical && x != null ? '历史 ' : ''}${h(n(x))}</span>`;
+    const percent = x => `<span class="${historical ? 'muted' : 'number'}">${historical && x != null ? '历史 ' : ''}${h(marketWatchPercent(x))}</span>`;
+    const source = sample.exchange === 'binance' ? 'Binance 现货' : '来源待核实';
+    const quote = id.split('/')[1] || '报价资产', rejection = sample.rejection15m;
+    const signals = view.signals.map(signal => tag(marketWatchSignal(signal), signal.code === 'VOLUME_EXPANSION' ? '' : 'bad')).join('<br>');
+    const details = `<details><summary>72 小时位置与 15 分钟观察</summary><p>72 小时最高 ${value(sample.high72h)} · 最低 ${value(sample.low72h)}<br>高于 72 小时低点 ${percent(sample.fromLow72hBps)} · 距 72 小时高点回撤 ${percent(sample.toHigh72hBps)}<br>${rejection ? `15 分钟闭合 ${h(time(rejection.at))} · 高点 ${value(rejection.high)} · 收盘 ${value(rejection.close)} · 回落 ${percent(rejection.drawdownBps)}<br>超过此前完整 72 小时高点：${h(rejection.new72hHigh == null ? '覆盖不足' : rejection.new72hHigh ? '是' : '否')}` : '缺少完整历史，暂无 15 分钟冲高回落指标。'}<br>已闭合 K 线 ${h(sample.barsUsed ?? '—')} 根${sample.missing?.length ? '<br>覆盖不足：' + h(sample.missing.join('、')) : ''}</p></details>`;
+    return `<tr data-market-pair="${h(id)}"><td><b>${h(id)}</b><br>${tag(labels[view.status] || '状态未知', ['STALE', 'UNAVAILABLE'].includes(view.status) ? 'bad' : '')}<br><span class="muted">${h(source)}</span></td><td>闭合 ${h(time(sample.lastClosedAt))}<br><span class="muted">接收 ${h(time(sample.observedAt))}</span></td><td>${value(sample.volumeRatio5m)}${sample.volumeRatio5m == null ? '' : ' 倍'}<br>最新成交额 ${value(sample.volume5m)} ${h(quote)}<br><span class="muted">前 ${h(sample.baselineBars ?? 12)} 柱平均</span> ${value(sample.meanVolume5m)}</td><td>1 小时 ${percent(sample.price1hBps)}<br>24 小时 ${percent(sample.price24hBps)}</td><td>${signals || (view.fresh ? '当前没有达到观察阈值' : '<span class="muted">不展示当前信号</span>')}${sample.error ? '<p class="negative">' + h(sample.error) + '</p>' : ''}${details}</td></tr>`;
+  });
+  const alerts = [...(watch.alerts || [])].sort((a, b) => Number(b.observedAt || 0) - Number(a.observedAt || 0)).slice(0, 20).map(alert => `<li data-market-alert><time>${h(time(alert.observedAt))} · ${h(alert.pair)} · ${h(alert.source === 'binance' ? 'Binance 现货' : '来源待核实')}</time>${h(marketWatchSignal(alert))}<br><span class="muted">历史提醒，事件闭合 ${h(time(alert.at))}</span></li>`);
+  return card('现货量价观察', `<p>${tag(enabled ? '观察已启用' : '观察已关闭')} ${enabled ? '随低优先级候选扫描更新；请开始一轮候选筛选获取数据。' : '可在设置中启用，随后开始候选筛选。'}<br>来源为 Binance 现货的已闭合 5 分钟 K 线。放量倍率 = 最新一柱报价币成交额 ÷ 前 12 柱同周期平均，比较基线不含当前柱；成交额不等于可成交深度。单所背景不能替代两所盘口复核。<br>观察不触发下单，不改变套利净收益排序；数据不足显示缺失，过期和失败值仅供历史参考。</p>${table(['交易对 / 数据状态', '闭合与接收时间', '5 分钟成交额与倍率', '闭合价格变化', '当前观察 / 数据范围'], rows, enabled ? '尚无观察数据，请先运行候选筛选。' : '量价观察尚未启用，没有新增观察请求。')}<h3>本机历史提醒（最近 20 条）</h3><p>相同闭合事件去重，提醒冷却随本机状态保存。</p><ul class="list">${alerts.join('') || '<li>暂无本机历史提醒</li>'}</ul>`);
+}
+
 function opportunities() {
   const opportunities = Object.values(state.opportunities), rates = Object.values(state.rates);
   const eligible = opportunities.flatMap(x => x.directions || []).filter(x => x.eligible && state.now - (x.sampleAt || 0) <= state.config.maxBookAgeMs).length;
@@ -128,6 +169,7 @@ function opportunities() {
     html += `<div class="grid2">${books.join('')}</div>`;
   }
   html += scannerPanel();
+  html += marketWatchPanel();
   return html;
 }
 function balance() {
@@ -170,11 +212,13 @@ function capitalPolicyRow(exchange = state.config.exchanges[0], asset = '', caps
 }
 function settings() {
   const c = state.config, filters = c.filters || {}, costs = c.costs?.rebalanceByQuote || {}, limits = c.risk?.dailyLossByQuote || {}, capital = c.capital || {};
+  const watch = marketWatchConfig();
   settingsPolicyBaseline = structuredClone({ costs, limits, byExchange: capital.byExchange || {} });
   const input = (label, name, value, extra = '') => `<label>${h(label)}<input name="${name}" value="${h(value ?? '')}" ${extra}></label>`;
   const quotes = [...new Set([...c.pairs.map(id => id.split('/')[1]), ...Object.keys(costs), ...Object.keys(limits)])].sort();
   const capitalRows = Object.entries(capital.byExchange || {}).flatMap(([ex, assets]) => Object.entries(assets).map(([asset, caps]) => capitalPolicyRow(ex, asset, caps)));
   return card('交易与轮询设置', `<form id="settings-form"><div class="form-grid">${input('关注交易对（逗号分隔）', 'pairs', c.pairs.join(', '))}${input('默认金额（报价资产）', 'amount', c.amount)}${input('备用金额（依次尝试，逗号分隔）', 'fallbackAmounts', c.fallbackAmounts.join(', '))}${input('固定缓冲（报价资产；无额外固定比例滑点）', 'buffer', c.buffer)}${input('Binance taker 费率（0.001 = 0.1%）', 'binanceFee', c.fees.binance)}${input('OKX taker 费率', 'okxFee', c.fees.okx)}${input('深度净利润门槛', 'minDepthProfit', c.minDepthProfit)}${input('限价保守净利润门槛', 'minProfit', c.minProfit)}${input('盘口最大时效（毫秒）', 'maxBookAgeMs', c.maxBookAgeMs, 'type="number"')}${input('余额最大时效（毫秒）', 'maxBalanceAgeMs', c.maxBalanceAgeMs, 'type="number"')}${input('每个交易对轮次间隔（毫秒）', 'slotMs', c.slotMs, 'type="number"')}${input('后台余额刷新间隔（毫秒）', 'balanceRefreshMs', c.balanceRefreshMs, 'type="number"')}${input('Binance 权重上限 / 分钟（100–1200）', 'binanceBudget', c.budgets.binance, 'type="number"')}${input('OKX 请求上限 / 分钟（100–240）', 'okxBudget', c.budgets.okx, 'type="number"')}<label>未知提交处理<select name="unknownAction"><option value="pause" ${c.unknownAction === 'pause' ? 'selected' : ''}>暂停并保留阻塞</option><option value="archive" ${c.unknownAction === 'archive' ? 'selected' : ''}>归档并保留阻塞</option></select></label>${input('候选池报价资产', 'scanQuote', c.scanQuote)}${input('扫描排除基础币（逗号分隔）', 'scanExcludeAssets', (c.scanExcludeAssets ?? ['BTC', 'ETH', 'SOL']).join(', '))}${input('扫描候选交易对（留空为全部共同市场）', 'scanPairs', (c.scanPairs ?? []).join(', '))}</div>
+    <h3>现货量价观察（可选）</h3><label><input name="marketWatchEnabled" type="checkbox" ${watch.enabled ? 'checked' : ''}>启用已闭合 K 线量价观察</label><p>仅随低优先级候选筛选读取公共现货数据，不启动自动筛选或实盘。倍率采用最新闭合 5 分钟报价币成交额与此前 12 柱平均；bp 为万分之一，500 bp = 5%。这些阈值只产生本机观察提醒，不更改套利利润门槛或授权交易。</p><div class="form-grid">${input('5 分钟成交额放大阈值（倍）', 'marketWatchVolumeRatio', watch.volumeRatio, 'inputmode="decimal"')}${input('1 小时绝对涨跌阈值（bp）', 'marketWatchPriceMoveBps', watch.priceMoveBps, 'inputmode="decimal"')}${input('15 分钟冲高回落阈值（bp）', 'marketWatchRejectionBps', watch.rejectionBps, 'inputmode="decimal"')}${input('本机提醒冷却（分钟，1–1440）', 'marketWatchCooldownMinutes', watch.cooldownMs / 60000, 'type="number" min="1" max="1440" step="any"')}</div>
     <h3>成本与流动性筛选</h3><p>再平衡成本按报价资产设置，只影响普通套利；净利润与保守净利润中各扣一次，不能另填入两侧费率。收益率门槛同样只影响普通套利；其他流动性保护适用于所有新单。留空表示不启用可选筛选，填写 0 保留零值含义。</p><div class="form-grid">${input('最低保守净收益率（bp；买入最坏成本口径）', 'filterMinNetBps', filters.minNetBps ?? '0', 'inputmode="decimal"')}${input('每所最大盘口价差（bp；留空不限）', 'filterMaxSpreadBps', filters.maxSpreadBps, 'inputmode="decimal"')}${input('每侧限价内最小有效深度（报价资产）', 'filterMinDepthNotional', filters.minDepthNotional ?? '0', 'inputmode="decimal"')}${input('两所盘口本机接收最大时差（毫秒；留空不限）', 'filterMaxBookSkewMs', filters.maxBookSkewMs, 'type="number" min="0" max="60000" step="1"')}</div>
     <h3>按报价资产配置成本与风险限额</h3><p>亏损限额按 Asia/Shanghai 自然日统计人工核对的实际亏损，盈利不抵消；空白不设限额，0 表示出现任何实际亏损即熔断。删除或提高限额不会解除已有熔断。</p><div id="quote-policies">${table(['报价资产', '单批再平衡成本估计', '当日已核对亏损限额', '操作'], quotes.map(q => quotePolicyRow(q, costs[q] ?? '0', limits[q] ?? '')))}</div><button id="add-quote-policy" type="button">增加报价资产</button>
     <h3>每所、每资产资金配额</h3><label><input type="checkbox" name="capitalEnabled" ${capital.enabled ? 'checked' : ''}>启用资金配额与预留库存</label><p>数量均以该行资产计。预留从可用余额中保留；单批最大支出作用于买入端报价资产和卖出端基础资产。买入后最大总库存仅限制买入的基础资产，不能假定另一腿成交抵消。上限留空不限，显式填写 0 禁止相应额度；未配置资产没有自定义上限。配额缩量后，后台重新计算深度、限价及利润。</p><div id="capital-policies">${table(['交易所', '资产', '预留可用库存', '单批最大支出', '买入后最大总库存', '操作'], capitalRows, '尚无自定义配额；点击“增加资产配额”配置。')}</div><button id="add-capital-policy" type="button">增加资产配额</button>
@@ -295,6 +339,11 @@ document.addEventListener('submit', async e => {
     fees: { binance: get('binanceFee'), okx: get('okxFee') }, buffer: get('buffer'), minProfit: get('minProfit'), minDepthProfit: get('minDepthProfit'),
     budgets: { binance: Number(get('binanceBudget')), okx: Number(get('okxBudget')) }, unknownAction: get('unknownAction'), scanQuote: get('scanQuote').toUpperCase(), scanExcludeAssets: get('scanExcludeAssets').split(',').map(x => x.trim().toUpperCase()).filter(Boolean), scanPairs: get('scanPairs').split(',').map(x => x.trim().toUpperCase()).filter(Boolean), feeConfirmed: f.has('feeConfirmed'), scannerAuto: f.has('scannerAuto') };
   for (const field of ['maxBookAgeMs', 'maxBalanceAgeMs', 'slotMs', 'balanceRefreshMs']) config[field] = Number(get(field));
-  try { Object.assign(config, policyConfig(e.target, f)); await api('/api/config', { config }); editing = false; notice('设置已保存。'); await refresh(); } catch (err) { notice(err.message); }
+  try {
+    const cooldownMinutes = Number(get('marketWatchCooldownMinutes')), cooldownMs = cooldownMinutes * 60000;
+    if (!Number.isFinite(cooldownMinutes) || cooldownMinutes < 1 || cooldownMinutes > 1440 || !Number.isSafeInteger(cooldownMs)) throw Error('提醒冷却须为 1–1440 分钟，并可转换为整数毫秒');
+    config.marketWatch = { enabled: f.has('marketWatchEnabled'), volumeRatio: get('marketWatchVolumeRatio'), priceMoveBps: get('marketWatchPriceMoveBps'), rejectionBps: get('marketWatchRejectionBps'), cooldownMs };
+    Object.assign(config, policyConfig(e.target, f)); await api('/api/config', { config }); editing = false; notice('设置已保存。'); await refresh();
+  } catch (err) { notice(err.message); }
 });
 try { csrf = (await api('/api/session')).csrf; await refresh(); setInterval(refresh, 2000); } catch (e) { notice(e.message); }

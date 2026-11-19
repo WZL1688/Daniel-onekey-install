@@ -3,6 +3,7 @@ import { fetch, EnvHttpProxyAgent } from 'undici';
 import { parse } from 'lossless-json';
 import { ApiError } from './scheduler.js';
 import { D, decimal, normalizeBook, pair, validateOrder } from './math.js';
+import { analyzeSpotKlines, KLINE_LIMIT } from './market-watch.js';
 const ORIGINS = { binance: 'https://api.binance.com', okx: 'https://www.okx.com' };
 const dispatcher = new EnvHttpProxyAgent();
 export const parseExchangeJson = text => parse(text, undefined, { parseNumber: value => Number.isSafeInteger(Number(value)) ? Number(value) : value });
@@ -59,7 +60,7 @@ export async function transport({ url, method, headers, body, mutation, dispatch
   return { status: response.status, headers: resultHeaders, data };
 }
 export class Exchanges {
-  constructor(store, vault, scheduler, request = transport) { this.store = store; this.vault = vault; this.scheduler = scheduler; this.transport = request; this.rotations = {}; this.okxContexts = new Map(); }
+  constructor(store, vault, scheduler, request = transport) { this.store = store; this.vault = vault; this.scheduler = scheduler; this.transport = request; this.rotations = {}; this.okxContexts = new Map(); this.marketContexts = new Map(); }
   chooseQuery(exchange, explicitId, allowUnverified = false) {
     const keys = this.store.state.keys.filter(k => k.exchange === exchange && k.role === 'query' && k.enabled &&
       (explicitId ? k.id === explicitId : allowUnverified || k.status === 'VERIFIED'));
@@ -129,6 +130,30 @@ export class Exchanges {
     if (Math.abs(offset) > 30000) throw Error(`本机与交易所时间偏差 ${offset.toFixed(1)} 毫秒（允许正负 30000 毫秒），请同步系统时钟`);
     (this.store.state.exchangeMeta[exchange] ||= {}).clock = { at: end, offset, rtt };
     this.store.save();
+  }
+  async marketContext(id, priority = 4) {
+    if (![4, 5].includes(priority)) throw Error('量价观察仅允许低优先级公共请求');
+    const { base, quote } = pair(id), rule = this.store.state.rules.binance?.[id];
+    if (!rule?.enabled || rule.symbol !== base + quote) throw Error('量价观察缺少有效且匹配的 Binance 现货规则');
+    await this.syncClock('binance', priority);
+    const currentClock = () => {
+      const clock = this.store.state.exchangeMeta.binance?.clock, age = Date.now() - clock?.at;
+      if (!Number.isSafeInteger(clock?.at) || clock.at <= 0 || !Number.isFinite(clock.offset) || Math.abs(clock.offset) > 30000 || !Number.isFinite(age) || age < 0 || age >= 60000) throw Error('量价观察服务器时钟失效');
+      return clock;
+    };
+    currentClock();
+    const cached = this.marketContexts.get(id), age = Date.now() - cached?.at;
+    if (cached && age >= 0 && age < 60000) return structuredClone(cached.summary);
+    this.marketContexts.delete(id);
+    const rows = await this.request('binance', { path: '/api/v3/klines',
+      params: { symbol: rule.symbol, interval: '5m', limit: String(KLINE_LIMIT) }, priority, weight: 2,
+      endpointCap: 4, dedupe: 'binance:market-context:' + id });
+    const clock = currentClock(), observedAt = Date.now();
+    const summary = { ...analyzeSpotKlines(rows, { now: observedAt + clock.offset }),
+      observedAt, clockOffsetMs: clock.offset, exchange: 'binance', pair: id };
+    this.marketContexts.set(id, { at: observedAt, summary: structuredClone(summary) });
+    while (this.marketContexts.size > 300) this.marketContexts.delete(this.marketContexts.keys().next().value);
+    return summary;
   }
   async rules(exchange, priority = 1, force = false) {
     const old = this.store.state.exchangeMeta[exchange];

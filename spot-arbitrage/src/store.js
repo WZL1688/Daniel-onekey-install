@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { syncDirectory } from './platform.js';
 import { acquireProcessLock } from './process-lock.js';
 import { enhancementDefaults, initializeEnhancements } from './policies.js';
+import { marketWatchDefaults, initializeMarketWatch } from './market-watch.js';
 export const defaults = () => ({
   version: 1,
   config: { exchanges: ['binance', 'okx'], pairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'], amount: '100', fallbackAmounts: ['50', '20'],
@@ -11,9 +12,10 @@ export const defaults = () => ({
     maxBookAgeMs: 5000, maxBalanceAgeMs: 15000, slotMs: 3000, balanceRefreshMs: 60000,
     budgets: { binance: 600, okx: 120 }, autoTrading: false, unknownAction: 'pause', scannerAuto: false, scanQuote: 'USDT',
     scanExcludeAssets: ['BTC', 'ETH', 'SOL'], scanPairs: [],
-    balance: {}, ...enhancementDefaults() },
+    balance: {}, marketWatch: marketWatchDefaults(), ...enhancementDefaults() },
   keys: [], accounts: {}, balances: {}, books: {}, rules: {}, exchangeMeta: {}, opportunities: {}, scanResults: {},
   batches: [], blocks: {}, cooldowns: {}, rates: {}, errors: [], events: [],
+  marketWatch: { samples: {}, alerts: [], cooldowns: {} },
   engine: { cursor: 0, lastPollAt: 0, lastCycleAt: 0, cycleMs: null, polls: 0, lastBalanceAt: 0, scanCursor: 0, scanRun: null },
 });
 export class Store {
@@ -39,6 +41,7 @@ export class Store {
       }
       this.state.config.autoTrading = false;
       initializeEnhancements(this.state);
+      initializeMarketWatch(this.state);
       for (const batch of this.state.batches) {
         for (const leg of batch.legs || []) if (leg.status === 'SENDING') { leg.status = 'UNKNOWN'; batch.status = 'UNKNOWN'; }
         for (const leg of batch.legs || []) if (leg.cancelStatus === 'SENDING') leg.cancelStatus = 'UNKNOWN';

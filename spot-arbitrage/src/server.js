@@ -7,6 +7,7 @@ import { Store, Vault } from './store.js';
 import { Scheduler } from './scheduler.js';
 import { Exchanges } from './exchanges.js';
 import { Engine } from './engine.js';
+import { marketWatchSnapshot } from './market-watch.js';
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const publicDir = path.join(ROOT, 'public');
 const verification = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/verification.json'), 'utf8'));
@@ -55,7 +56,7 @@ export function createApp({ dataDir = process.env.ARB_DATA_DIR || path.join(ROOT
           return [id, { ...result, failed, stale: Boolean(result.invalidated || failed || !sampledAt || now < sampledAt || now - sampledAt > state.config.maxBookAgeMs) }];
         }));
         return json(res, 200, { now, config: state.config, keys: vault.publicKeys(), accounts: state.accounts, balances: state.balances,
-          books, opportunities, scanResults, batches: state.batches.slice(0, 200), blocks: state.blocks,
+          books, opportunities, scanResults, marketWatch: marketWatchSnapshot(state, now), batches: state.batches.slice(0, 200), blocks: state.blocks,
           engine: { ...state.engine, scanRun: engine.scanProgress(), running: engine.running, busy: engine.busy, slotMs: engine.slotMs(), estimatedCycleMs: engine.slotMs() * state.config.pairs.length, scannerRunning: engine.scanActive() || engine.scanRequested },
           rates: scheduler.snapshot(), errors: state.errors.slice(0, 60), events: state.events.slice(0, 60), liveReasons: engine.liveReasons(), docsVerified: engine.docsVerified, risk: engine.riskStatus(),
           balanceDirections: Object.fromEntries(state.config.pairs.map(id => [id, engine.balanceDirection(id)])) });

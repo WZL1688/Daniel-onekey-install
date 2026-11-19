@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { D, decimal, evaluate, pair } from './math.js';
 import { binancePreflightBudget } from './scheduler.js';
 import { validateEnhancements, quotaConstraints, assertQuota, syncRisk, riskStatus, resetRisk } from './policies.js';
+import { validateMarketWatch, recordMarketWatch } from './market-watch.js';
 export { RISK_RESET_CONFIRM } from './policies.js';
 export const LIVE_CONFIRM = '确认开启实盘并理解双腿风险';
 export const LOSS_CONFIRM = '确认允许动态平衡亏损';
@@ -22,7 +23,7 @@ export function validateConfig(input, previous, confirmation) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw Error('设置格式错误');
   const allowed = ['exchanges', 'pairs', 'amount', 'fallbackAmounts', 'fees', 'feeConfirmed', 'buffer', 'minProfit', 'minDepthProfit',
     'maxBookAgeMs', 'maxBalanceAgeMs', 'slotMs', 'balanceRefreshMs', 'budgets', 'unknownAction', 'scannerAuto', 'scanQuote', 'scanExcludeAssets', 'scanPairs', 'balance',
-    'costs', 'filters', 'capital', 'risk'];
+    'costs', 'filters', 'capital', 'risk', 'marketWatch'];
   if (Object.keys(input).some(k => !allowed.includes(k))) throw Error('设置包含未允许的字段；实盘必须单独确认');
   const next = mergeSettings(previous, input);
   if (!Array.isArray(next.exchanges) || next.exchanges.length !== 2 || new Set(next.exchanges).size !== 2 || next.exchanges.some(x => !['binance', 'okx'].includes(x))) throw Error('请选择 Binance 和 OKX 两个不同现货交易所');
@@ -59,6 +60,7 @@ export function validateConfig(input, previous, confirmation) {
     if (loss.gt(0) && !loss.eq(previous.balance?.[id]?.maxLoss || 0) && confirmation !== LOSS_CONFIRM) throw Error('设置正数最大亏损必须再次确认');
   }
   Object.assign(next, validateEnhancements(next));
+  next.marketWatch = validateMarketWatch(next.marketWatch);
   return next;
 }
 export class Engine {
@@ -420,10 +422,24 @@ export class Engine {
     if (!this.currentScan(run)) return;
     const id = run.ids[run.completed], [a, b] = state.config.exchanges;
     run.currentPair = id; this.store.save();
+    // Optional research data is loaded before current books. It never replaces
+    // depth/profit checks, and an unavailable observation is not a failed book.
+    let marketContext;
+    if (state.config.marketWatch?.enabled) {
+      try { marketContext = await this.exchanges.marketContext(id, priority); }
+      catch (error) {
+        const code = String(error?.code ?? ''), safeCode = /^[A-Z0-9_-]{1,64}$/.test(code) ? code : 'DATA_OR_NETWORK';
+        const status = Number.isInteger(error?.status) && error.status >= 400 && error.status <= 599 ? error.status : 0;
+        marketContext = { status: 'UNAVAILABLE', observedAt: Date.now(), lastClosedAt: null,
+          exchange: 'binance', pair: id, error: `量价观察暂不可用（HTTP ${status} / ${safeCode}）` };
+      }
+      if (!this.currentScan(run)) return;
+    }
     // Delay cache writes until the current run is checked again. A stopped or
     // superseded scan must not publish late results from its in-flight requests.
     const results = await Promise.allSettled([a, b].map(ex => this.publicBook(ex, id, priority, { persist: false })));
     if (!this.currentScan(run)) return;
+    if (marketContext) { recordMarketWatch(state, id, marketContext, Date.now()); this.store.save(); }
     try {
       const errors = results.flatMap((result, index) => result.status === 'rejected' ? [`${[a, b][index]}：${result.reason.message}`] : []);
       if (errors.length) throw Error(errors.join('；'));

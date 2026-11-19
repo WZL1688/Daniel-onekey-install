@@ -23,6 +23,8 @@ npm start
 
 后续已针对 Binance 全市场规则体积过大增加官方 `showPermissionSets=false` 参数，省略未使用的权限集合内容，保留全市场交易规则及 15 MB 大小保护。已有上一修复版的用户可只覆盖 `src/exchanges.js` 和 `scripts/diagnose-network.js`，无需更改依赖或运行数据。见 [规则体积修复验收](docs/BINANCE_RULES_FIX_20261106.md)。
 
+新增可选 [现货量价观察](docs/MARKET_WATCH.md)：从已闭合现货 K 线计算同周期成交额放大、涨跌与冲高回落，保留本机持久化提醒冷却。默认关闭，仅随低优先级候选扫描更新，不参与下单授权，不引入未经核实的翻倍概率、合约 OI 或资金费。见 [本次验收](docs/MARKET_WATCH_RELEASE_20261119.md)。
+
 ## 已实现功能
 
 - 实时机会、动态平衡、账户余额、Key 状态、提交记录、API 调度、错误与设置八个页面。

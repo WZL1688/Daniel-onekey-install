@@ -1,0 +1,77 @@
+{
+  "type": "OFFICIAL_SHAPED_LOCAL_FIXTURE_NOT_EXCHANGE",
+  "status": "COMPLETED",
+  "startedAt": "2026-11-19T02:14:06.125Z",
+  "completedAt": "2026-11-19T02:15:11.432Z",
+  "elapsedMs": 65307,
+  "bindHost": "127.0.0.1",
+  "servicePort": 38283,
+  "configuredPairs": [
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT"
+  ],
+  "localSamples": 65,
+  "localHttpAverageMs": 4,
+  "slotMs": 3000,
+  "expectedCycleMs": 9000,
+  "observedCycleMs": 9256,
+  "pollRounds": 22,
+  "successfulSampledPairs": [
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT"
+  ],
+  "counters": {
+    "binance": {
+      "public": 33,
+      "private": 0,
+      "orders": 0,
+      "failures": 0,
+      "limited": 0,
+      "delayed": 0,
+      "waitMs": 3,
+      "latencyMs": 176,
+      "backoffReason": "",
+      "httpStatuses": {},
+      "averageExchangeAttemptMs": 5
+    },
+    "okx": {
+      "public": 31,
+      "private": 0,
+      "orders": 0,
+      "failures": 0,
+      "limited": 0,
+      "delayed": 0,
+      "waitMs": 0,
+      "latencyMs": 160,
+      "backoffReason": "",
+      "httpStatuses": {},
+      "averageExchangeAttemptMs": 5
+    }
+  },
+  "liveTrading": false,
+  "batchesCreated": 0,
+  "pendingQueue": {
+    "binance": 0,
+    "okx": 0
+  },
+  "limitations": [
+    "价格、K线和放量来自本地合成夹具，不是实盘机会、未来涨幅或市值数据。",
+    "仅验证观察与去重，未使用真实账户或发送订单。"
+  ],
+  "validationFailures": [],
+  "scope": "MARKET_WATCH_LOCAL_ONLY",
+  "candidatePairs": [
+    "TSTA/USDT",
+    "TSTB/USDT",
+    "TSTC/USDT"
+  ],
+  "completedScanRuns": 2,
+  "klineRequests": 3,
+  "alerts": 9,
+  "observedFresh": 162,
+  "repeatedCandleAlerts": 0,
+  "exchangeNetworkRequests": 0,
+  "userDataTouched": false
+}
