@@ -1,29 +1,15 @@
-# ChainPair v1.2.0 · 完整整合版
+# ChainPair 本机双链工作台 v1.3.0
 
-[点击下载完整项目 ZIP](downloads/ChainPair-local.zip?raw=true)
+[下载源码 ZIP](https://raw.githubusercontent.com/WZL1688/Daniel-onekey-install/chainpair-local-20261116/downloads/ChainPair-local.zip) · [SHA256](downloads/ChainPair-local.zip.sha256) · [完整使用说明](chainpair/docs/USER-GUIDE.md)
 
-全部功能在同一个本机程序中：行情首页、设置与钱包、跨链、交易档案和备忘录，共五个标签页。无需分别安装旧版或补丁。
+解压，安装 Node.js 24 LTS，Windows 双击 ChainPair/start.cmd；macOS/Linux 在目录运行 ./start.sh。也可运行 npm ci 后 npm start。保留启动终端，浏览器必须打开终端显示的完整 http://127.0.0.1:端口/ 地址，不能省略端口。
 
-## 启动与更新
+新增入口：行情首页 → Meme 雷达。提供 BNB/Solana 的 AVE 只读榜单、可解释市场筛选、CA复制、AVE直达、观察收藏备注和手动开启的中英文设备本地语音。API Key 使用本机密码加密保存；已有保险库锁定时，保存Key不会解锁交易钱包。详情见 [雷达配置教程](chainpair/docs/MEME-RADAR.md)。
 
-安装 Node.js 24 或更新版本，解压后进入 `ChainPair` 文件夹。Windows 双击 `start.cmd`，macOS / Linux 运行 `./start.sh`。启动后会请求默认浏览器打开实际分配的本机地址。地址必须包含端口，具体以命令窗口为准，并保留窗口运行。
+默认套利演示、雷达关闭。雷达需自行申请 AVE Key；第三方额度与收费以账户套餐为准。市场初筛通过不代表代币安全，雷达不触发买入，也不自动设置套利地址。API请求共享5分钟间隔及持久预算；重启后需手动开启。
 
-更新已有程序时先关闭旧程序，保留原 `data/` 目录。发布包没有钱包、私钥、API 凭据或数据库；源码中的数据库迁移保留旧交易和备忘录。
+保留插件钱包、本机加密钱包、顺序套利、OKX跨链及60/40再平衡、交易档案、本地复盘和分页备忘录。实盘受RPC、API权限、资产映射、允许的交易格式与实际路线约束，尚未进行真钱验收。
 
-## 已整合功能
+本版158项自动测试及四组浏览器流程通过，详见 [验证记录](chainpair/docs/TEST-RESULTS.md)。源码包没有运行数据、钱包文件、API Key、日志或node_modules；test目录只包含固定模拟凭据。
 
-- BNB Chain／Solana 代币、池、轮换 RPC、价格和套利收益分析。
-- 严格买入确认 → 实际数量跨链 → 目标链到账确认 → 按实收数量卖出，异常暂停且不自动重播。
-- 本机密码加密私钥、只读地址，以及 BNB MetaMask／OKX 和 Solana Phantom／OKX 插件连接。插件交易逐笔确认；无人值守可用本机加密私钥模式。
-- 1–10U 套利风控、手动跨链、低于5U触发并以60/40为目标的再平衡，以及磨损与Gas储备检查。
-- 完整报价、哈希、回执、失败状态、备忘录及分页。
-- v1.2.0：独立交易意图校验、每笔风控快照与审计指纹、本地每日复盘及脱敏JSON导出。复盘不修改参数或触发交易；没有接入第三方研究代理、模型置信度下单或夜间自动发布策略。
-- 修正有利跨链成交的净利润和估实差异，复盘明确剔除费用缺失或收支矛盾的数据。
-
-进入“设置与钱包”→“钱包管理”，用安装并解锁了插件的同一浏览器连接。默认仍是演示模式，连接插件不会自动触发真实交易。实盘需满足API、代币映射、池、白名单、余额、授权和支持路由等条件。
-
-[源码与启动说明](chainpair/README.md) · [详细使用指南](chainpair/docs/USER-GUIDE.md) · [执行与复盘边界](chainpair/docs/SAFE-DEVELOPMENT.md) · [实盘支持范围](chainpair/docs/LIVE-ADAPTER.md) · [测试记录](chainpair/docs/TEST-RESULTS.md)
-
-123项自动测试，以及原页面、模拟插件钱包和复盘导出的三组浏览器验收通过。没有进行真实资金验收，不承诺盈利或绝对资金安全。
-
-源码公开可见，发布包不含用户运行数据、私钥、API凭据、数据库或依赖目录。SHA256：`981da5506d936ea4d8e199e9b0c74ecdaada4cc10249b36dadbe4b85ff7d1199`。
+更新前停止旧进程并备份自己的data目录；本包不包含个人数据。不要把钱包、Key或data目录提交到公开仓库。

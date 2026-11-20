@@ -42,7 +42,7 @@ export class Vault {
         out[chain]={address:w.address,mode:'browser',provider:w.provider,connected,unlocked:connected,canSign:connected,locked:false,hasLocalProfile:!!local,hasLocalWallet:!!local,localAddress:local?.address??null};
       }else out[chain]=w?{address:w.address,mode:w.mode,unlocked:w.mode==='private'&&!!this.payload,canSign:w.mode==='private'&&!!this.payload,locked:w.mode==='private'&&!this.payload}:{address:null,mode:'none',unlocked:false,canSign:false,locked:false};
     }
-    out.okxConfigured=!!this.public.okxConfigured;out.locked=existsSync(this.file)&&!this.payload;out.unlocked=!!this.payload;return out;
+    out.okxConfigured=!!this.public.okxConfigured;out.aveConfigured=!!this.public.aveConfigured;out.locked=existsSync(this.file)&&!this.payload;out.unlocked=!!this.payload;return out;
   }
   #password(password){if(typeof password!=='string'||password.length<10||password.length>1024)throw safeError('密码长度须为10–1024个字符');}
   #openOrCreate(password){this.#password(password);if(this.payload){if(password){const k=scryptSync(password,this.salt,32,OPTIONS);if(!k.equals(this.key)){k.fill(0);throw safeError('密码不正确');}k.fill(0);}return;}if(existsSync(this.file)){this.unlock(password);return;}this.salt=randomBytes(16);this.key=scryptSync(password,this.salt,32,OPTIONS);this.payload={wallets:{},okx:null};}
@@ -52,7 +52,7 @@ export class Vault {
     const record=readJson(this.file,null);let key;
     try{if(record.version!==1||record.kdf!=='scrypt')throw Error();const salt=Buffer.from(record.salt,'base64');if(salt.length!==16)throw Error();key=scryptSync(password,salt,32,OPTIONS);const decipher=createDecipheriv('aes-256-gcm',key,Buffer.from(record.iv,'base64'));decipher.setAAD(Buffer.from('dualarb-vault-v1'));decipher.setAuthTag(Buffer.from(record.tag,'base64'));const decoded=Buffer.concat([decipher.update(Buffer.from(record.ciphertext,'base64')),decipher.final()]);const payload=JSON.parse(decoded.toString('utf8'));decoded.fill(0);if(!payload.wallets)throw Error();this.lock();this.key=key;this.salt=salt;this.payload=payload;for(const chain of ['bnb','solana'])if(this.public[chain]?.mode!=='private'&&!(this.public[chain]?.mode==='browser'&&this.public.localProfiles[chain]?.mode==='private'))delete this.payload.wallets[chain];return this.publicStatus();}catch{key?.fill(0);throw safeError('解锁失败：密码不正确或钱包文件损坏');}
   }
-  lock(){this.key?.fill(0);this.key=null;this.salt=null;if(this.payload){for(const k of Object.keys(this.payload.wallets||{}))this.payload.wallets[k]='';if(this.payload.okx)for(const k of Object.keys(this.payload.okx))this.payload.okx[k]='';}this.payload=null;return this.publicStatus();}
+  lock(){this.key?.fill(0);this.key=null;this.salt=null;if(this.payload){for(const k of Object.keys(this.payload.wallets||{}))this.payload.wallets[k]='';if(this.payload.okx)for(const k of Object.keys(this.payload.okx))this.payload.okx[k]='';if(this.payload.ave)for(const k of Object.keys(this.payload.ave))this.payload.ave[k]='';}this.payload=null;return this.publicStatus();}
   importWallet({chain,mode,secret,address,password,provider}={}){
     checkChain(chain);if(!['private','readonly','browser'].includes(mode))throw safeError('钱包模式无效');
     if(mode==='browser'){
@@ -76,6 +76,17 @@ export class Vault {
     if(![apiKey,secretKey,passphrase].every((s)=>typeof s==='string'&&s.trim().length>0&&s.length<=2000))throw safeError('OKX 凭证不完整');
     this.#openOrCreate(password);this.payload.okx={apiKey:apiKey.trim(),secretKey:secretKey.trim(),passphrase:passphrase.trim()};this.public.okxConfigured=true;this.#save();return {configured:true};
   }
+  setAveCredentials({apiKey,password}={}){
+    if(typeof apiKey!=='string'||!apiKey.trim()||apiKey.length>1000||!/^[\x21-\x7e]+$/.test(apiKey.trim()))throw safeError('AVE API Key 须为不含空白的有效字符，长度不超过1000');
+    const wasLocked=existsSync(this.file)&&!this.payload;
+    try{this.#openOrCreate(password);this.payload.ave={apiKey:apiKey.trim()};this.public.aveConfigured=true;this.#save();return {configured:true};}
+    finally{if(wasLocked)this.lock();}
+  }
+  clearAveCredentials(){
+    if(!this.payload)throw safeError('请先解锁本机保险库再删除 AVE API Key');
+    if(this.payload.ave)for(const k of Object.keys(this.payload.ave))this.payload.ave[k]='';
+    this.payload.ave=null;this.public.aveConfigured=false;this.#save();return {configured:false};
+  }
   redact(value){
     let out=String(value??'');const secrets=[];
     for(const [chain,key] of Object.entries(this.payload?.wallets||{})){
@@ -84,6 +95,7 @@ export class Vault {
       else try{const bytes=Array.from(bs58.decode(key));secrets.push(JSON.stringify(bytes),bytes.join(','));}catch{}
     }
     secrets.push(...Object.values(this.payload?.okx||{}));
+    const aveKey=this.payload?.ave?.apiKey;if(typeof aveKey==='string'&&aveKey)out=out.split(aveKey).join('[REDACTED]');
     for(const secret of secrets.filter((s)=>typeof s==='string'&&s.length>=6).sort((a,b)=>b.length-a.length)){
       out=out.split(secret).join('[REDACTED]');
       if(/^(0x)?[0-9a-f]{64}$/i.test(secret))out=out.split(secret.toUpperCase()).join('[REDACTED]');
@@ -91,4 +103,5 @@ export class Vault {
     return out.replace(/\b(private[_ -]?key|secret[_ -]?key|passphrase|password|api[_ -]?key)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;}]+)/gi,'$1=[REDACTED]');
   }
   getOkxCredentials(){if(!this.payload?.okx)return null;return {...this.payload.okx};}
+  getAveCredentials(){if(!this.payload?.ave?.apiKey)return null;return {apiKey:this.payload.ave.apiKey};}
 }

@@ -8,7 +8,7 @@ const isEqual=(a,b)=>{if(typeof a!=='string'||typeof b!=='string')return false;c
 const safe=(message)=>Object.assign(new Error(message),{safe:true});
 const asyncRoute=(handler)=>(req,res,next)=>Promise.resolve(handler(req,res)).catch(next);
 const cookieValue=(raw,name)=>{for(const cookie of (raw||'').split(';')){const i=cookie.indexOf('=');if(cookie.slice(0,i).trim()===name)return cookie.slice(i+1).trim();}return '';};
-export function createApp({engine,store,vault,browserWallets,reviewService,publicDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../public')}={}){
+export function createApp({engine,store,vault,browserWallets,reviewService,radarService,publicDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../public')}={}){
   const app=express();app.disable('x-powered-by');
   const busy=()=>engine.busy||engine.snapshot()?.engine?.busy;
   let changingWallet=false;
@@ -32,6 +32,7 @@ export function createApp({engine,store,vault,browserWallets,reviewService,publi
     return out;
   };
   const reviews=()=>{if(!reviewService)throw safe('本地复盘服务未启用，请更新并重启程序');return reviewService;};
+  const radar=()=>{if(!radarService)throw safe('只读雷达服务未启用，请更新并重启程序');return radarService;};
   const session=randomBytes(32).toString('hex');const csrfToken=randomBytes(32).toString('hex');
   const sessionCookie=`dualarb_session=${session}; HttpOnly; SameSite=Strict; Path=/`;
   app.use((req,res,next)=>{
@@ -52,6 +53,21 @@ export function createApp({engine,store,vault,browserWallets,reviewService,publi
     next();
   });
   app.get('/api/state',asyncRoute(async(req,res)=>res.json(await engine.snapshot())));
+  // Discovery stays independent from the trading engine: these routes cannot
+  // change token addresses, start execution, request signatures or place trades.
+  app.get('/api/radar',asyncRoute(async(req,res)=>res.json(await radar().snapshot())));
+  app.post('/api/radar/settings',asyncRoute(async(req,res)=>res.json(await radar().saveSettings(req.body?.settings))));
+  app.post('/api/radar/enabled',asyncRoute(async(req,res)=>res.json(await radar().setEnabled(req.body?.enabled))));
+  app.post('/api/radar/refresh',asyncRoute(async(req,res)=>res.json(await radar().refresh())));
+  app.post('/api/radar/risk',asyncRoute(async(req,res)=>res.json(await radar().checkRisk({chain:req.body?.chain,address:req.body?.address}))));
+  app.post('/api/radar/watch',asyncRoute(async(req,res)=>res.json(await radar().toggleWatch({chain:req.body?.chain,address:req.body?.address,note:req.body?.note}))));
+  app.post('/api/radar/credentials',asyncRoute(async(req,res)=>{
+    const service=radar();const result=vault.setAveCredentials({apiKey:req.body?.apiKey,password:req.body?.password});
+    await service.credentialsChanged();res.json(result);
+  }));
+  app.delete('/api/radar/credentials',asyncRoute(async(req,res)=>{
+    const service=radar();const result=vault.clearAveCredentials();await service.credentialsChanged();res.json(result);
+  }));
   app.post('/api/config',asyncRoute(async(req,res)=>res.json(await engine.saveConfig(req.body?.config))));
   app.post('/api/engine/start',asyncRoute(async(req,res)=>res.json(await engine.start())));
   app.post('/api/engine/pause',asyncRoute(async(req,res)=>res.json(await engine.pause('用户暂停'))));
@@ -116,7 +132,7 @@ export function createApp({engine,store,vault,browserWallets,reviewService,publi
     await broker().resolve({clientId:body.clientId,requestId:body.requestId,result:body.result,error:body.error});res.json({ok:true});
   }));
   app.post('/api/wallets/unlock',asyncRoute(async(req,res)=>{await withWalletChange(async()=>{vault.unlock(req.body?.password);scheduleWalletRefresh();});res.json(vault.publicStatus());}));
-  app.post('/api/wallets/lock',asyncRoute(async(req,res)=>{await withWalletChange(async()=>vault.lock());res.json(vault.publicStatus());}));
+  app.post('/api/wallets/lock',asyncRoute(async(req,res)=>{await withWalletChange(async()=>{vault.lock();await radarService?.credentialsChanged();});res.json(vault.publicStatus());}));
   app.post('/api/okx/credentials',asyncRoute(async(req,res)=>{let result;await withWalletChange(async()=>{result=vault.setOkxCredentials(req.body);scheduleWalletRefresh();});res.json(result);}));
   app.post('/api/bridge/quote',asyncRoute(async(req,res)=>{
     const {fromChain,toChain,amountUsd}=req.body||{};
