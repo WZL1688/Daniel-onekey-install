@@ -1,15 +1,23 @@
-# ChainPair 本机双链工作台 v1.3.0
+# ChainPair 本机双链工作台 v1.4.0
 
-[下载源码 ZIP](https://raw.githubusercontent.com/WZL1688/Daniel-onekey-install/chainpair-local-20261116/downloads/ChainPair-local.zip) · [SHA256](downloads/ChainPair-local.zip.sha256) · [完整使用说明](chainpair/docs/USER-GUIDE.md)
+[下载源码 ZIP](https://raw.githubusercontent.com/WZL1688/Daniel-onekey-install/chainpair-local-20261116/downloads/ChainPair-local.zip) · [SHA256](downloads/ChainPair-local.zip.sha256) · [使用说明](chainpair/docs/USER-GUIDE.md)
 
-解压，安装 Node.js 24 LTS，Windows 双击 ChainPair/start.cmd；macOS/Linux 在目录运行 ./start.sh。也可运行 npm ci 后 npm start。保留启动终端，浏览器必须打开终端显示的完整 http://127.0.0.1:端口/ 地址，不能省略端口。
+解压并安装 Node.js 24 LTS。Windows 双击 ChainPair/start.cmd；macOS/Linux 在目录运行 ./start.sh，也可运行 npm ci 后 npm start。保留启动终端，浏览器必须打开终端显示的完整 http://127.0.0.1:端口/ 地址，不能省略端口。同一数据目录只允许一个交易进程。
 
-新增入口：行情首页 → Meme 雷达。提供 BNB/Solana 的 AVE 只读榜单、可解释市场筛选、CA复制、AVE直达、观察收藏备注和手动开启的中英文设备本地语音。API Key 使用本机密码加密保存；已有保险库锁定时，保存Key不会解锁交易钱包。详情见 [雷达配置教程](chainpair/docs/MEME-RADAR.md)。
+## 新增：同币机会与库存套利
 
-默认套利演示、雷达关闭。雷达需自行申请 AVE Key；第三方额度与收费以账户套餐为准。市场初筛通过不代表代币安全，雷达不触发买入，也不自动设置套利地址。API请求共享5分钟间隔及持久预算；重启后需手动开启。
+入口：行情首页 → 同币机会。可读取 CoinGecko 双链地址候选，按精确CA扫描BNB/Solana交易池价差；支持手工清单。名称和符号不能确认同币，目录不覆盖全市场。
 
-保留插件钱包、本机加密钱包、顺序套利、OKX跨链及60/40再平衡、交易档案、本地复盘和分页备忘录。实盘受RPC、API权限、资产映射、允许的交易格式与实际路线约束，尚未进行真钱验收。
+核对1:1资产关系、两链地址、精度、交易池并保存映射确认后，可复核双边报价和库存，手动提交或单独开启已核验清单自动执行。扫描与交易分别控制，自动交易仍遵守1–10U、利润、滑点、费用、Gas储备、次数和累计金额。
 
-本版158项自动测试及四组浏览器流程通过，详见 [验证记录](chainpair/docs/TEST-RESULTS.md)。源码包没有运行数据、钱包文件、API Key、日志或node_modules；test目录只包含固定模拟凭据。
+库存模式固定低价侧买入确认后，在高价侧卖出预先持有的同币，卖量来自实际到账换算。高价侧必须有目标币，两边只有稳定币无法这样套利；库存不足跳过，单边失败暂停并留档，不隐含跨链补库或自动再平衡。库存现金流价差单列，未含未来补库存成本。
 
-更新前停止旧进程并备份自己的data目录；本包不包含个人数据。不要把钱包、Key或data目录提交到公开仓库。
+配置步骤见 [库存与机会扫描教程](chainpair/docs/INVENTORY-OPPORTUNITIES.md)。多资产使用独立执行上下文，不自动改写全局代币地址；目录变化或已确认参数修改会撤销旧核验。插件钱包仍需逐笔确认；本机私钥密码加密保存。
+
+## 保留的功能
+
+原跨链套利模式、OKX手动跨链及60/40再平衡（跨链模式）、MetaMask/OKX/Phantom、AVE只读Meme雷达、交易档案、本地复盘和分页备忘录均保留。默认演示模式，所有新扫描重启后关闭。
+
+本版215项自动测试、五组浏览器流程通过。公开数据源联通尝试在开发环境未成功，未完成真实行情或真钱验收；实际使用受网络、API权限、RPC、库存、授权及支持的交易格式约束，不保证盈利。公共接口是否免费以提供方当前规则为准。
+
+源码包不包含运行数据、钱包文件、用户Key、日志或node_modules；test目录只有固定模拟凭据。升级前停止旧进程并备份自己的data目录，再替换程序文件；不要上传自己的data目录。

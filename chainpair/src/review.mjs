@@ -52,28 +52,35 @@ export function buildDailyReview(trades, { day, mode = 'demo', now = Date.now() 
   const completed = scoped.filter(trade => String(trade.status).toUpperCase() === 'COMPLETED' && inPeriod(completionTime(trade)));
   const pending = scoped.filter(trade => String(trade.status).toUpperCase() === 'NEEDS_REVIEW');
   const valid = completed.map(trade => ({ trade, actual: verifiedActual(trade), expected: expectedProfit(trade) })).filter(row => row.actual);
-  const paired = valid.filter(row => row.expected !== null);
-  const actualProfitUsd = sum(valid.map(row => row.actual.profitUsd));
+  const inventoryRows = valid.filter(row => row.trade.executionMode === 'inventory' || row.trade.actual?.closedInventory === false);
+  const closedRows = valid.filter(row => !inventoryRows.includes(row));
+  const inventoryPaired = inventoryRows.filter(row => row.expected !== null);
+  const paired = closedRows.filter(row => row.expected !== null);
+  const actualProfitUsd = sum(closedRows.map(row => row.actual.profitUsd));
   const estimatedProfitUsd = sum(paired.map(row => row.expected));
   const pairedActualProfitUsd = sum(paired.map(row => row.actual.profitUsd));
   const differenceUsd = paired.length ? new Decimal(pairedActualProfitUsd).minus(estimatedProfitUsd).toNumber() : null;
   const observations = [{ code: 'READ_ONLY', text: '本地复盘只生成统计与检查建议，不修改风控、发布策略或触发交易。' }];
   if (!valid.length) observations.push({ code: 'NO_VERIFIED_RESULTS', text: '该日期没有通过完整收支字段核对的完成记录，实际净收益尚未验证。' });
+  if (inventoryRows.length) observations.push({ code: 'INVENTORY_CASH_SPREAD', text: `${inventoryRows.length} 笔库存交易只核对两腿现金流价差，单独统计；两链库存尚未回补，未来补库成本未计入，不合入闭环净收益。` });
   if (pending.length) observations.push({ code: 'MANUAL_REVIEW_REQUIRED', text: `当前仍有 ${pending.length} 笔该模式的交易待人工核对，请检查链上回执与实际余额。` });
   if (completed.length > valid.length) observations.push({ code: 'INCOMPLETE_ACCOUNTING', text: `${completed.length - valid.length} 笔完成记录存在费用缺失或收支不一致，未计入已复核净收益。` });
-  if (valid.length > paired.length) observations.push({ code: 'MISSING_ESTIMATE', text: `${valid.length - paired.length} 笔已复核记录缺少对应估算，未计入估实差异比较。` });
+  if (closedRows.length > paired.length) observations.push({ code: 'MISSING_ESTIMATE', text: `${closedRows.length - paired.length} 笔闭环已复核记录缺少对应估算，未计入估实差异比较。` });
   if (differenceUsd !== null && differenceUsd < -0.00000001) observations.push({ code: 'ESTIMATE_OVERSTATED', text: '实际净收益低于对应估算，请离线检查报价时效、跨链到账折损及费用；报告不会自动调整参数。' });
   if (actualProfitUsd !== null && actualProfitUsd < 0) observations.push({ code: 'NEGATIVE_REALIZED_RESULT', text: '该日期已复核净收益为负，请先核查成交与成本记录，再由用户决定后续操作。' });
   observations.push({ code: 'COST_COVERAGE', text: '费用仅覆盖本工具归档的交易；外部钱包手动授权、充值等额外支出需另行核对。' });
   const byType = ['arbitrage', 'manual', 'rebalance', 'unknown'].map(type => {
-    const rows = valid.filter(row => (TYPES.has(row.trade.type) ? row.trade.type : 'unknown') === type);
+    const rows = closedRows.filter(row => (TYPES.has(row.trade.type) ? row.trade.type : 'unknown') === type);
     return { type, count: rows.length, profitUsd: sum(rows.map(row => row.actual.profitUsd)) };
   });
   return {
     id: `${mode}:${day}`, schemaVersion: 1, day, mode, timeZone: TIME_ZONE, generatedAt: new Date(now).toISOString(),
     period: { start: new Date(period.start).toISOString(), end: new Date(period.end).toISOString() },
-    counts: { initiated: initiated.length, completed: completed.length, needsReview: pending.length, incomplete: completed.length - valid.length, verified: valid.length, compared: paired.length },
-    pnl: { actualProfitUsd, estimatedProfitUsd, pairedActualProfitUsd, differenceUsd, networkAndProtocolUsd: sum(valid.map(row => row.actual.networkAndProtocolUsd)), rentUsd: sum(valid.map(row => row.actual.rentUsd)) },
+    counts: { initiated: initiated.length, completed: completed.length, needsReview: pending.length, incomplete: completed.length - valid.length, verified: valid.length, compared: paired.length, closed: closedRows.length, inventory: inventoryRows.length },
+    pnl: { actualProfitUsd, estimatedProfitUsd, pairedActualProfitUsd, differenceUsd, networkAndProtocolUsd: sum(closedRows.map(row => row.actual.networkAndProtocolUsd)), rentUsd: sum(closedRows.map(row => row.actual.rentUsd)) },
+    inventory: { verified: inventoryRows.length, compared: inventoryPaired.length, cashSpreadProfitUsd: sum(inventoryRows.map(row => row.actual.profitUsd)), estimatedCashSpreadUsd: sum(inventoryPaired.map(row => row.expected)),
+      differenceUsd: inventoryPaired.length ? new Decimal(sum(inventoryPaired.map(row => row.actual.profitUsd))).minus(sum(inventoryPaired.map(row => row.expected))).toNumber() : null,
+      networkAndProtocolUsd: sum(inventoryRows.map(row => row.actual.networkAndProtocolUsd)), rentUsd: sum(inventoryRows.map(row => row.actual.rentUsd)), closedInventory: false, includesRestockingCosts: false },
     byType, observations,
     policyVersions: new Set(initiated.map(trade => trade.policyFingerprint).filter(value => typeof value === 'string')).size,
     valuation: '稳定币按1美元面值、原生币按交易归档参考汇率折算；这是本工具记录的收支统计，不是实时法币估值。',
@@ -93,7 +100,7 @@ export class ReviewService {
     const report = this.current(input);
     // Explicit allowlist: future archive fields cannot silently enter exported research data.
     return { format: 'chainpair.read-only-review.v1', schemaVersion: report.schemaVersion, day: report.day, mode: report.mode, timeZone: report.timeZone,
-      generatedAt: report.generatedAt, period: report.period, counts: report.counts, pnl: report.pnl, byType: report.byType,
+      generatedAt: report.generatedAt, period: report.period, counts: report.counts, pnl: report.pnl, inventory: report.inventory, byType: report.byType,
       observations: report.observations, policyVersions: report.policyVersions, valuation: report.valuation, coverage: report.coverage };
   }
   tick() {

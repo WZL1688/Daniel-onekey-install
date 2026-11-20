@@ -1,5 +1,6 @@
 export const DEFAULT_CONFIG = {
-  mode: 'demo', pollIntervalMs: 5000, quoteTtlMs: 15000,
+  mode: 'demo', executionMode: 'bridge', pollIntervalMs: 5000, quoteTtlMs: 15000,
+  inventory: { assetId: '', mappingConfirmed: false, mappingEvidence: '', scanApprovedAssets: false },
   chains: {
     bnb: { tokenAddress: '', stableAddress: '0x55d398326f99059fF775485246999027B3197955', poolAddress: '', tokenDecimals: 18, stableDecimals: 18, rpcs: ['https://bsc-dataseed.binance.org'], confirmations: 3, nativeUsd: 600, routerAllowlist: [] },
     solana: { tokenAddress: '', stableAddress: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', poolAddress: '', tokenDecimals: 9, stableDecimals: 6, rpcs: ['https://api.mainnet-beta.solana.com'], confirmations: 1, nativeUsd: 150, programAllowlist: [] },
@@ -26,6 +27,15 @@ export function validateConfig(input) {
   const config = structuredClone(DEFAULT_CONFIG);
   if (input.mode !== undefined) config.mode = input.mode;
   if (!['demo', 'live'].includes(config.mode)) fail('运行模式');
+  config.executionMode = input.executionMode ?? 'bridge';
+  if (!['bridge', 'inventory'].includes(config.executionMode)) fail('执行模式');
+  if (input.inventory !== undefined && (!input.inventory || typeof input.inventory !== 'object' || Array.isArray(input.inventory))) fail('库存配置');
+  config.inventory.assetId = text(input.inventory?.assetId ?? '', 'inventory.assetId',160);
+  config.inventory.mappingEvidence = text(input.inventory?.mappingEvidence ?? '', 'inventory.mappingEvidence',1000);
+  config.inventory.mappingConfirmed = input.inventory?.mappingConfirmed ?? false;
+  if (typeof config.inventory.mappingConfirmed !== 'boolean') fail('inventory.mappingConfirmed');
+  config.inventory.scanApprovedAssets = input.inventory?.scanApprovedAssets ?? false;
+  if (typeof config.inventory.scanApprovedAssets !== 'boolean') fail('inventory.scanApprovedAssets');
   for (const [key, lo, hi] of [['pollIntervalMs',1000,300000], ['quoteTtlMs',1000,60000]]) if (input[key] !== undefined) config[key] = num(input[key],lo,hi,key,true);
   for (const chain of ['bnb','solana']) {
     const c = { ...config.chains[chain], ...(input.chains?.[chain] || {}) };

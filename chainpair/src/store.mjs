@@ -30,6 +30,8 @@ export class Store {
       CREATE TABLE IF NOT EXISTS quotes(id TEXT PRIMARY KEY,created_at TEXT NOT NULL,document TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS notes(id TEXT PRIMARY KEY,created_at TEXT NOT NULL,text TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS reservations(trade_id TEXT PRIMARY KEY,amount_usd REAL NOT NULL,created_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS inventory_reservations(trade_id TEXT PRIMARY KEY, mode TEXT NOT NULL, chain TEXT NOT NULL, token_address TEXT NOT NULL, amount_raw TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS inventory_reservations_asset ON inventory_reservations(mode,chain,token_address);
       CREATE TABLE IF NOT EXISTS daily_reviews(id TEXT PRIMARY KEY,day TEXT NOT NULL,mode TEXT NOT NULL,generated_at TEXT NOT NULL,document TEXT NOT NULL,UNIQUE(day,mode));
       CREATE INDEX IF NOT EXISTS events_trade ON events(trade_id,seq);
       CREATE INDEX IF NOT EXISTS trades_time ON trades(created_at DESC);
@@ -61,7 +63,43 @@ export class Store {
   listTrades(page=1,pageSize=20){const p=pageArgs(page,pageSize);const total=this.db.prepare('SELECT COUNT(*) AS n FROM trades').get().n;const items=this.db.prepare('SELECT document FROM trades ORDER BY created_at DESC,rowid DESC LIMIT ? OFFSET ?').all(p.pageSize,(p.page-1)*p.pageSize).map((r)=>JSON.parse(r.document));return {...p,total,totalPages:Math.max(1,Math.ceil(total/p.pageSize)),items};}
   allTrades(){return this.db.prepare('SELECT document FROM trades ORDER BY created_at DESC').all().map((r)=>this.getTrade(JSON.parse(r.document).id));}
   reserveExecution(tradeId,amountUsd){if(!Number.isFinite(amountUsd)||amountUsd<1||amountUsd>10)throw new Error('套利金额必须为1–10U');this.db.prepare('INSERT OR IGNORE INTO reservations(trade_id,amount_usd,created_at) VALUES(?,?,?)').run(tradeId,amountUsd,new Date().toISOString());return this.stats();}
-  stats(mode=this.config?.mode||'demo'){const trades=this.db.prepare('SELECT document FROM trades').all().map((r)=>JSON.parse(r.document)).filter((t)=>(t.mode||'demo')===mode);const ids=new Set(trades.map((t)=>t.id));const reservations=this.db.prepare('SELECT trade_id,amount_usd FROM reservations').all().filter((r)=>ids.has(r.trade_id));const volumeUsd=reservations.reduce((sum,r)=>sum+r.amount_usd,0);let profitUsd=0,completed=0;for(const t of trades){if(['completed','COMPLETED'].includes(t.status||t.state)){completed++;const p=t.actualProfitUsd??t.actual?.profitUsd??t.reconciliation?.actualProfitUsd??t.result?.actualProfitUsd;if(Number.isFinite(p))profitUsd+=p;}}return {mode,executions:reservations.length,count:reservations.length,volumeUsd,cumulativeUsd:volumeUsd,completed,profitUsd};}
+  inventoryKey({mode,chain,address}){
+    if(!['demo','live'].includes(mode)||!['bnb','solana'].includes(chain)||typeof address!=='string'||address.length>100)throw reviewError('库存预占资产无效');
+    const demo=mode==='demo'&&address===`demo-${chain}-token`;
+    if(!demo&&!(chain==='bnb'?/^0x[0-9a-f]{40}$/i.test(address):/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address)))throw reviewError('库存预占代币地址无效');
+    return {mode,chain,address:chain==='bnb'?address.toLowerCase():address};
+  }
+  getReservedInventory({mode,chain,address,excludeTradeId}={}){
+    const key=this.inventoryKey({mode,chain,address});
+    return this.db.prepare('SELECT trade_id,amount_raw FROM inventory_reservations WHERE mode=? AND chain=? AND token_address=?').all(key.mode,key.chain,key.address).filter(row=>row.trade_id!==excludeTradeId).reduce((sum,row)=>sum+BigInt(row.amount_raw),0n).toString();
+  }
+  reserveInventory({tradeId,mode,chain,address,amountRaw,availableRaw}={}){
+    const key=this.inventoryKey({mode,chain,address});
+    if(typeof tradeId!=='string'||!tradeId||tradeId.length>160||typeof amountRaw!=='string'||!/^[1-9]\d{0,77}$/.test(amountRaw)||typeof availableRaw!=='string'||!/^\d{1,78}$/.test(availableRaw))throw reviewError('库存预占数量无效');
+    const max=chain==='bnb'?(1n<<256n)-1n:(1n<<64n)-1n;
+    if(BigInt(amountRaw)>max||BigInt(availableRaw)>max)throw reviewError('库存预占数量超过链上范围');
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const prior=this.db.prepare('SELECT mode,chain,token_address FROM inventory_reservations WHERE trade_id=?').get(tradeId);
+      if(prior&&(prior.mode!==key.mode||prior.chain!==key.chain||prior.token_address!==key.address))throw reviewError('库存预占身份不一致');
+      const reserved=BigInt(this.getReservedInventory({...key,excludeTradeId:tradeId}));
+      if(reserved+BigInt(amountRaw)>BigInt(availableRaw))throw reviewError('高价侧可用代币库存不足或已被其他任务预占');
+      this.db.prepare('INSERT INTO inventory_reservations(trade_id,mode,chain,token_address,amount_raw,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(trade_id) DO UPDATE SET amount_raw=excluded.amount_raw,updated_at=excluded.updated_at').run(tradeId,key.mode,key.chain,key.address,amountRaw,new Date().toISOString());
+      this.db.exec('COMMIT');return {tradeId,...key,amountRaw};
+    }catch(error){this.db.exec('ROLLBACK');throw error;}
+  }
+  releaseInventory(tradeId){return this.db.prepare('DELETE FROM inventory_reservations WHERE trade_id=?').run(tradeId).changes>0;}
+  stats(mode=this.config?.mode||'demo'){
+    const trades=this.db.prepare('SELECT document FROM trades').all().map((r)=>JSON.parse(r.document)).filter(t=>(t.mode||'demo')===mode),ids=new Set(trades.map(t=>t.id));
+    const reservations=this.db.prepare('SELECT trade_id,amount_usd FROM reservations').all().filter(r=>ids.has(r.trade_id)),volumeUsd=reservations.reduce((sum,r)=>sum+r.amount_usd,0);
+    let profitUsd=0,completed=0,inventoryCashSpreadUsd=0,inventoryCompleted=0;
+    for(const t of trades)if(['completed','COMPLETED'].includes(t.status||t.state)){
+      completed++;const p=t.actualProfitUsd??t.actual?.profitUsd??t.reconciliation?.actualProfitUsd??t.result?.actualProfitUsd;
+      if(t.executionMode==='inventory'||t.actual?.closedInventory===false){inventoryCompleted++;if(Number.isFinite(p))inventoryCashSpreadUsd+=p;}
+      else if(Number.isFinite(p))profitUsd+=p;
+    }
+    return {mode,executions:reservations.length,count:reservations.length,volumeUsd,cumulativeUsd:volumeUsd,completed,profitUsd,inventoryCashSpreadUsd,inventoryCompleted};
+  }
   saveQuote(quote){const out={...scrub(quote),id:quote.id||randomUUID(),createdAt:quote.createdAt||new Date().toISOString()};this.db.prepare('INSERT INTO quotes(id,created_at,document) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET document=excluded.document').run(out.id,out.createdAt,json(out));return out;}
   getQuote(id){const row=this.db.prepare('SELECT document FROM quotes WHERE id=?').get(id);return row?JSON.parse(row.document):null;}
   addNote(text){if(typeof text!=='string'||!text.trim()||text.length>20000)throw new Error('备忘录内容须为1–20000字');const note={id:randomUUID(),createdAt:new Date().toISOString(),text:text.trim()};this.db.prepare('INSERT INTO notes(id,created_at,text) VALUES(?,?,?)').run(note.id,note.createdAt,note.text);return note;}

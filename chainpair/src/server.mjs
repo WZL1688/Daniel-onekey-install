@@ -8,7 +8,7 @@ const isEqual=(a,b)=>{if(typeof a!=='string'||typeof b!=='string')return false;c
 const safe=(message)=>Object.assign(new Error(message),{safe:true});
 const asyncRoute=(handler)=>(req,res,next)=>Promise.resolve(handler(req,res)).catch(next);
 const cookieValue=(raw,name)=>{for(const cookie of (raw||'').split(';')){const i=cookie.indexOf('=');if(cookie.slice(0,i).trim()===name)return cookie.slice(i+1).trim();}return '';};
-export function createApp({engine,store,vault,browserWallets,reviewService,radarService,publicDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../public')}={}){
+export function createApp({engine,store,vault,browserWallets,reviewService,radarService,opportunityService,inventoryCoordinator,publicDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../public')}={}){
   const app=express();app.disable('x-powered-by');
   const busy=()=>engine.busy||engine.snapshot()?.engine?.busy;
   let changingWallet=false;
@@ -33,6 +33,12 @@ export function createApp({engine,store,vault,browserWallets,reviewService,radar
   };
   const reviews=()=>{if(!reviewService)throw safe('本地复盘服务未启用，请更新并重启程序');return reviewService;};
   const radar=()=>{if(!radarService)throw safe('只读雷达服务未启用，请更新并重启程序');return radarService;};
+  const opportunities=()=>{if(!opportunityService)throw safe('同币机会服务未启用，请更新并重启程序');return opportunityService;};
+  const coordinator=()=>{if(!inventoryCoordinator)throw safe('库存执行服务未启用，请更新并重启程序');return inventoryCoordinator;};
+  const registryChange=()=>{if(engine.busy||engine.configuring)throw safe('交易或配置更新进行中，暂不能变更同币清单');};
+  const assetId=value=>{if(typeof value!=='string'||!value||value.length>160)throw safe('同币清单编号无效');return value;};
+  const expectedMode=value=>{if(!['demo','live'].includes(value)||value!==engine.config.mode)throw safe('页面运行模式已变化，请刷新并核对模拟／实盘后重试');};
+  const assetRevision=(id,value)=>{const asset=opportunities().getApprovedAsset(id);if(!Number.isSafeInteger(value)||asset.revision!==value)throw safe('同币清单已变化，请刷新后重新核验报价');};
   const session=randomBytes(32).toString('hex');const csrfToken=randomBytes(32).toString('hex');
   const sessionCookie=`dualarb_session=${session}; HttpOnly; SameSite=Strict; Path=/`;
   app.use((req,res,next)=>{
@@ -53,6 +59,32 @@ export function createApp({engine,store,vault,browserWallets,reviewService,radar
     next();
   });
   app.get('/api/state',asyncRoute(async(req,res)=>res.json(await engine.snapshot())));
+  app.get('/api/opportunities',asyncRoute(async(req,res)=>res.json({...opportunities().snapshot(),execution:coordinator().snapshot()})));
+  app.post('/api/opportunities/discover',asyncRoute(async(req,res)=>{registryChange();res.json(await opportunities().discover());}));
+  app.post('/api/opportunities/scan',asyncRoute(async(req,res)=>res.json(await opportunities().scan())));
+  app.post('/api/opportunities/enabled',asyncRoute(async(req,res)=>{if(req.body?.enabled)registryChange();res.json(await opportunities().setEnabled(req.body?.enabled));}));
+  app.post('/api/opportunities/settings',asyncRoute(async(req,res)=>{registryChange();res.json(await opportunities().saveSettings(req.body?.settings));}));
+  app.post('/api/opportunities/assets',asyncRoute(async(req,res)=>{registryChange();res.json(await opportunities().saveAsset(req.body?.asset));}));
+  app.delete('/api/opportunities/assets/:id',asyncRoute(async(req,res)=>{registryChange();res.json(await opportunities().removeAsset(assetId(req.params.id)));}));
+  app.post('/api/opportunities/approve',asyncRoute(async(req,res)=>{
+    registryChange();const body=req.body||{};
+    res.json(await opportunities().approveAsset({id:assetId(body.id),confirmed:body.confirmed,evidence:body.evidence,chains:body.chains,revision:body.revision}));
+  }));
+  app.post('/api/opportunities/quote',asyncRoute(async(req,res)=>{expectedMode(req.body?.expectedMode);const id=assetId(req.body?.id);assetRevision(id,req.body?.revision);res.json(await coordinator().quote(id));}));
+  app.post('/api/opportunities/execute',asyncRoute(async(req,res)=>{expectedMode(req.body?.expectedMode);const id=assetId(req.body?.id);assetRevision(id,req.body?.revision);res.status(202).json(await coordinator().execute(id));}));
+  app.post('/api/opportunities/automation',asyncRoute(async(req,res)=>{
+    if(typeof req.body?.enabled!=='boolean')throw safe('自动执行开关格式无效');
+    if(!req.body.enabled){await engine.pause('已暂停清单自动执行；在途交易仍须完成或人工核对');return res.json(coordinator().snapshot());}
+    expectedMode(req.body.expectedMode);
+    registryChange();const service=opportunities();
+    if(!service.snapshot().assets.some(asset=>asset.enabled!==false&&(asset.confirmed||asset.mapping?.confirmed||asset.mappingConfirmed)))throw safe('请先核验至少一个同币地址、精度与交易池');
+    const config=structuredClone(engine.config);config.executionMode='inventory';config.inventory={...config.inventory,scanApprovedAssets:true};
+    await engine.saveConfig(config);const revision=engine.configRevision;await service.setEnabled(true);
+    if(!service.enabled)throw safe('行情扫描未能开启，自动交易保持暂停；请先核对数据源状态');
+    expectedMode(req.body.expectedMode);if(engine.configRevision!==revision)throw safe('配置或钱包已变化，自动执行保持暂停，请重新核对');
+    await engine.start();
+    res.json(coordinator().snapshot());
+  }));
   // Discovery stays independent from the trading engine: these routes cannot
   // change token addresses, start execution, request signatures or place trades.
   app.get('/api/radar',asyncRoute(async(req,res)=>res.json(await radar().snapshot())));

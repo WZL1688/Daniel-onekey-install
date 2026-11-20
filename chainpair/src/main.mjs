@@ -9,12 +9,17 @@ import { openBrowser } from './browser.mjs';
 import { BrowserWalletBridge } from './browser-wallets.mjs';
 import { ReviewService } from './review.mjs';
 import { RadarService } from './radar/service.mjs';
+import { OpportunityService } from './opportunities/service.mjs';
+import { InventoryCoordinator } from './opportunities/coordinator.mjs';
+import { acquireRuntimeLock } from './runtime-lock.mjs';
 
 const major = Number(process.versions.node.split('.')[0]);
 if (major < 24) throw new Error('请安装 Node.js 24 LTS 或更新版本');
 const projectDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dataDir = path.resolve(process.env.DUALARB_DATA_DIR || path.join(projectDir, 'data'));
 mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+const runtimeLock = acquireRuntimeLock(dataDir);
+process.once('exit', () => runtimeLock.release());
 const store = new Store(dataDir);
 const browserWallets = new BrowserWalletBridge({ store });
 const vault = new Vault(dataDir, { browserWallets });
@@ -27,7 +32,9 @@ browserWallets.onUncertain = ({ tradeId, hash, requestId, reason }) => {
 await engine.init();
 const reviewService = new ReviewService({ store, getConfig: () => engine.config }).start();
 const radarService = new RadarService({ store, vault }).start();
-const { server, url } = await startLocalServer({ engine, store, vault, browserWallets, reviewService, radarService });
+const opportunityService = new OpportunityService({ store, getConfig: () => engine.config }).start();
+const inventoryCoordinator = new InventoryCoordinator({ engine, scanner: opportunityService });
+const { server, url } = await startLocalServer({ engine, store, vault, browserWallets, reviewService, radarService, opportunityService, inventoryCoordinator });
 console.log(`\n双链套利工作台已启动\n本机地址：${url}\n数据目录：${dataDir}\n模式：${engine.config.mode === 'demo' ? '演示（不会广播链上交易）' : '实盘（本机保险库需解锁；插件钱包需连接）'}\n按 Ctrl+C 退出。\n`);
 console.log('浏览器地址必须包含端口号；请使用上面显示的完整本机地址。');
 if (process.argv.includes('--open') && !process.argv.includes('--no-open')) {
@@ -36,7 +43,7 @@ if (process.argv.includes('--open') && !process.argv.includes('--no-open')) {
 }
 let closing = false;
 async function shutdown() {
-  if (closing) return; closing = true; engine.stop(); browserWallets.close(); reviewService.stop(); radarService.stop();
+  if (closing) return; closing = true; engine.stop(); browserWallets.close(); reviewService.stop(); radarService.stop(); opportunityService.stop();
   console.log('停止接收新请求。正在关闭本机服务；在途交易下次启动必须人工核对。');
   server.close(); server.closeIdleConnections?.();
   // A forced shutdown never retries a persisted intent when the process restarts.

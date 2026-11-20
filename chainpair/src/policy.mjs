@@ -15,7 +15,8 @@ const freeze = value => { if (value && typeof value === 'object') { for (const c
 /** An allowlisted audit policy, deliberately excluding RPC/API/wallet credentials. */
 export function createPolicySnapshot(config) {
   const snapshot = {
-    schemaVersion: 1, mode: config.mode, quoteTtlMs: config.quoteTtlMs,
+    schemaVersion: 1, mode: config.mode, executionMode: config.executionMode || 'bridge', quoteTtlMs: config.quoteTtlMs,
+    inventory: { assetId: config.inventory?.assetId || '', mappingConfirmed: config.inventory?.mappingConfirmed === true, mappingEvidence: config.inventory?.mappingEvidence || '', scanApprovedAssets: config.inventory?.scanApprovedAssets === true },
     risk: fields(config.risk, RISK_FIELDS), rebalance: fields(config.rebalance, REBALANCE_FIELDS),
     chains: Object.fromEntries(CHAINS.map(chain => [chain, {
       ...fields(config.chains?.[chain], CHAIN_FIELDS),
@@ -42,6 +43,16 @@ export function positiveRaw(value, chain, name) {
   const integer = BigInt(value);
   if (!MAX_RAW[chain] || integer > MAX_RAW[chain]) throw fail(`${name}超出链上整数范围`);
   return integer;
+}
+/** A 1:1 asset quantity, expressed using the destination token's raw precision. */
+export function convertInventoryAmount(amountRaw, buyDecimals, sellDecimals, sellChain) {
+  if (typeof amountRaw !== 'string' || !/^[1-9]\d*$/.test(amountRaw) || amountRaw.length > 78 || ![buyDecimals,sellDecimals].every(n=>Number.isInteger(n)&&n>=0&&n<=36)) throw fail('库存换算数量或精度无效');
+  const input = BigInt(amountRaw), numerator = input * 10n ** BigInt(sellDecimals), divisor = 10n ** BigInt(buyDecimals);
+  const output = numerator / divisor;
+  positiveRaw(output.toString(), sellChain, '库存卖出数量');
+  // When destination precision is lower, this is the exact unsold raw remainder.
+  const representedBuyRaw = output * divisor / (10n ** BigInt(sellDecimals));
+  return { amountRaw: output.toString(), dustBuyRaw: (input - representedBuyRaw).toString() };
 }
 export function assertQuoteIntent(quote, expected, { policy, wallets = {}, nowMs = Date.now() } = {}) {
   if (!quote || typeof quote !== 'object' || Array.isArray(quote) || !expected) throw fail('缺少完整报价');
@@ -77,7 +88,12 @@ export function intentForLeg(trade, stage) {
   const buy = trade.buyChain, sell = trade.sellChain, legs = trade.legs || [];
   const quantity = () => new Decimal(trade.amountUsd).mul(new Decimal(10).pow(configuredToken(policy, buy, 'stable').decimals)).floor().toFixed(0);
   if (trade.type === 'arbitrage') {
+    if (policy.executionMode === 'inventory' && policy.mode === 'live' && (!policy.inventory?.mappingConfirmed || !policy.inventory?.assetId || !policy.inventory?.mappingEvidence)) throw fail('库存模式缺少已确认的1:1同币映射依据');
     if (stage === 'BUY' && legs.length === 0) return swapIntent(buy, configuredToken(policy, buy, 'stable'), configuredToken(policy, buy), quantity());
+    if (policy.executionMode === 'inventory') {
+      if (stage === 'SELL' && legs.length === 1 && legs[0].name === 'BUY' && legs[0].status === 'CONFIRMED' && legs[0].receipt?.confirmed === true) return swapIntent(sell, configuredToken(policy, sell), configuredToken(policy, sell, 'stable'), convertInventoryAmount(legs[0].receipt.receivedRaw, configuredToken(policy,buy).decimals, configuredToken(policy,sell).decimals,sell).amountRaw);
+      throw fail('库存模式须先买入确认，再卖出预置库存，禁止跨链步骤');
+    }
     if (stage === 'BRIDGE' && legs.length === 1 && legs[0].name === 'BUY' && legs[0].status === 'CONFIRMED' && legs[0].receipt?.confirmed === true) return bridgeIntent(buy, sell, configuredToken(policy, buy), configuredToken(policy, sell), legs[0].receipt.receivedRaw);
     if (stage === 'SELL' && legs.length === 2 && legs[0].name === 'BUY' && legs[0].status === 'CONFIRMED' && legs[1].name === 'BRIDGE' && legs[1].status === 'CONFIRMED' && legs[1].receipt?.confirmed === true) return swapIntent(sell, configuredToken(policy, sell), configuredToken(policy, sell, 'stable'), legs[1].receipt.receivedRaw);
   } else if (['manual', 'rebalance'].includes(trade.type) && stage === 'BRIDGE' && legs.length === 0) {
