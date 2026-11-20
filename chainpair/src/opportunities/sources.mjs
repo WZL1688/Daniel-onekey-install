@@ -1,5 +1,6 @@
 import { getAddress } from 'ethers';
 import { PublicKey } from '@solana/web3.js';
+import { WORMHOLE_WRAPPED_URL, normalizeWrappedMapping } from './wormhole.mjs';
 
 // Independent, read-only clients for the documented CoinGecko coin directory
 // and DexScreener token-pool lookup APIs. The caller owns request scheduling.
@@ -95,7 +96,7 @@ function retryAfter(headers, now) {
   return Math.min(MAX_RETRY_MS, Math.max(MIN_RETRY_MS, Math.ceil(delay)));
 }
 
-async function readJson(response, maxBytes) {
+async function readBody(response, maxBytes) {
   const length = response.headers?.get?.('content-length');
   if (length && /^\d+$/.test(length) && Number(length) > maxBytes) {
     await response.body?.cancel?.().catch(() => {});
@@ -113,34 +114,56 @@ async function readJson(response, maxBytes) {
       chunks.push(value);
     }
   } finally { reader.releaseLock(); }
-  try { return JSON.parse(Buffer.concat(chunks, size).toString('utf8')); }
-  catch { throw safeError('公开行情响应无法解析', 'DISCOVERY_FORMAT'); }
+  return Buffer.concat(chunks, size).toString('utf8');
+}
+
+function networkReason(error) {
+  const code = error?.cause?.code || error?.code;
+  if (['ENOTFOUND', 'EAI_AGAIN'].includes(code)) return 'DNS';
+  if (['ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT'].includes(code)) return 'TIMEOUT';
+  if (['ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH', 'ENETUNREACH', 'UND_ERR_SOCKET'].includes(code)) return 'CONNECTION';
+  if (['CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'ERR_TLS_CERT_ALTNAME_INVALID', 'SELF_SIGNED_CERT_IN_CHAIN'].includes(code)) return 'TLS';
+  if (['UND_ERR_PRX_TLS', 'ERR_PROXY_CONNECTION_FAILED'].includes(code)) return 'PROXY';
+  return 'NETWORK';
 }
 
 export class DiscoveryClient {
   constructor({ fetchImpl = globalThis.fetch, now = Date.now } = {}) { this.fetchImpl = fetchImpl; this.now = now; }
 
-  async #get(url, { signal, maxBytes }) {
+  async #get(url, { signal, maxBytes, apiKey, rawText = false }) {
     const timeout = AbortSignal.timeout(DEADLINE_MS), combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
     try {
-      const response = await this.fetchImpl(url, { method: 'GET', headers: { Accept: 'application/json' }, redirect: 'error', signal: combined });
+      const headers = { Accept: rawText ? 'text/plain' : 'application/json' };
+      if (apiKey !== undefined && url === DIRECTORY_URL) headers['x-cg-demo-api-key'] = apiKey;
+      const response = await this.fetchImpl(url, { method: 'GET', headers, redirect: 'error', signal: combined });
       if (!response.ok) response.body?.cancel?.().catch(() => {});
-      if (response.status === 429) throw safeError('公开行情接口限流，请等待冷却', 'DISCOVERY_RATE_LIMIT', { retryAfterMs: retryAfter(response.headers, this.now()) });
-      if (response.status === 401 || response.status === 403) throw safeError('公开行情接口要求账户或凭证，请核对服务权限，或使用手工核验清单', 'DISCOVERY_AUTH');
-      if (!response.ok) throw safeError('公开行情服务拒绝或暂时无法处理请求', 'DISCOVERY_REJECTED');
-      const body = await readJson(response, maxBytes);
+      if (response.status === 429) throw safeError('公开行情接口限流，请等待冷却', 'DISCOVERY_RATE_LIMIT', { retryAfterMs: retryAfter(response.headers, this.now()), httpStatus: 429 });
+      if (response.status === 401 || response.status === 403) throw safeError('公开行情接口要求账户或凭证，请核对服务权限', 'DISCOVERY_AUTH', { httpStatus: response.status });
+      if (response.status >= 500) throw safeError('公开行情服务暂时不可用', 'DISCOVERY_UNAVAILABLE', { httpStatus: response.status });
+      if (!response.ok) throw safeError('公开行情服务拒绝请求', 'DISCOVERY_REJECTED', { httpStatus: response.status });
+      const content = await readBody(response, maxBytes);
+      if (rawText) return content;
+      let body; try { body = JSON.parse(content); } catch { throw safeError('公开行情响应无法解析', 'DISCOVERY_FORMAT'); }
       if (body && typeof body === 'object' && !Array.isArray(body) && (Object.hasOwn(body, 'error') || Object.hasOwn(body, 'status'))) throw safeError('公开行情接口返回非成功结果，请核对服务状态及权限', 'DISCOVERY_REJECTED');
       return body;
     } catch (error) {
       if (knownErrors.has(error)) throw error;
-      if (timeout.aborted) throw safeError('公开行情请求超时', 'DISCOVERY_TIMEOUT');
+      if (timeout.aborted) throw safeError('公开行情请求超时', 'DISCOVERY_TIMEOUT', { networkReason: 'TIMEOUT' });
       if (signal?.aborted) throw safeError('公开行情请求已取消', 'DISCOVERY_ABORTED');
-      throw safeError('公开行情网络请求失败，请检查连接', 'DISCOVERY_NETWORK');
+      throw safeError('公开行情网络请求失败，请检查连接', 'DISCOVERY_NETWORK', { networkReason: networkReason(error) });
     }
   }
-  async discover({ signal } = {}) {
-    const body = await this.#get(DIRECTORY_URL, { signal, maxBytes: 8 * 1024 * 1024 });
-    return normalizeDiscovery(body, { observedAt: this.now() });
+  async discover({ signal, apiKey } = {}) {
+    if (apiKey !== undefined && (typeof apiKey !== 'string' || !apiKey || apiKey.length > 1000 || !/^[\x21-\x7e]+$/.test(apiKey))) throw safeError('CoinGecko Demo Key 格式无效', 'DISCOVERY_CREDENTIALS');
+    const body = await this.#get(DIRECTORY_URL, { signal, maxBytes: 8 * 1024 * 1024, apiKey });
+    const candidates = normalizeDiscovery(body, { observedAt: this.now() });
+    // A malformed provider response must not reflect the credential into a
+    // public token field, registry entry or externally displayed source link.
+    return apiKey ? candidates.filter(candidate => !JSON.stringify(candidate).includes(apiKey)) : candidates;
+  }
+  async discoverWrapped({ signal } = {}) {
+    const content = await this.#get(WORMHOLE_WRAPPED_URL, { signal, maxBytes: 256 * 1024, rawText: true });
+    return normalizeWrappedMapping(content, { observedAt: this.now() });
   }
   async pools({ chain, addresses, signal } = {}) {
     const remoteChain = chainKey(chain);

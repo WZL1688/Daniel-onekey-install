@@ -11,6 +11,7 @@ import { ReviewService } from './review.mjs';
 import { RadarService } from './radar/service.mjs';
 import { OpportunityService } from './opportunities/service.mjs';
 import { InventoryCoordinator } from './opportunities/coordinator.mjs';
+import { bundledDirectory } from './opportunities/bundled.mjs';
 import { acquireRuntimeLock } from './runtime-lock.mjs';
 
 const major = Number(process.versions.node.split('.')[0]);
@@ -32,7 +33,7 @@ browserWallets.onUncertain = ({ tradeId, hash, requestId, reason }) => {
 await engine.init();
 const reviewService = new ReviewService({ store, getConfig: () => engine.config }).start();
 const radarService = new RadarService({ store, vault }).start();
-const opportunityService = new OpportunityService({ store, getConfig: () => engine.config }).start();
+const opportunityService = new OpportunityService({ store, vault, bundledCandidates: bundledDirectory(), getConfig: () => engine.config }).start({ autoStart: process.env.DUALARB_AUTO_SCAN !== '0' });
 const inventoryCoordinator = new InventoryCoordinator({ engine, scanner: opportunityService });
 const { server, url } = await startLocalServer({ engine, store, vault, browserWallets, reviewService, radarService, opportunityService, inventoryCoordinator });
 console.log(`\n双链套利工作台已启动\n本机地址：${url}\n数据目录：${dataDir}\n模式：${engine.config.mode === 'demo' ? '演示（不会广播链上交易）' : '实盘（本机保险库需解锁；插件钱包需连接）'}\n按 Ctrl+C 退出。\n`);

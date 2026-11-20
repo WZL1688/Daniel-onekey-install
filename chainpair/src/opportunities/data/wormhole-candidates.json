@@ -1,0 +1,779 @@
+{
+  "schema": 1,
+  "source": "wormhole-foundation/wormhole-connect",
+  "commit": "267c9a649c74097cdbf5096d1d37cb45e7695a5b",
+  "sourceDate": "2026-04-08",
+  "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+  "license": "Apache-2.0",
+  "notice": "Official origin-backed address snapshot; unverified candidates only, no price or safety assertion.",
+  "candidates": [
+    {
+      "id": "wormhole:d103059a929035ac3c8cfe2b786f669359ca04ff",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "WETH",
+      "name": "WETH",
+      "chains": {
+        "bnb": {
+          "address": "0x4DB5a66E937A9F4473fA95b1cAF1d1E1D62E29EA"
+        },
+        "solana": {
+          "address": "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Ethereum",
+        "address": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:95bff18d96687ac539352c7f70cc396c822a8322",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "USDC",
+      "name": "USDC",
+      "chains": {
+        "bnb": {
+          "address": "0xB04906e95AB5D797aDA81508115611fee694c2b3"
+        },
+        "solana": {
+          "address": "A9mUU4qviSctJVPJdBJWkb28deg915LYJKrzQ19ji3FM"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Ethereum",
+        "address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:d28e0bfb570c4f99f247562ca65e5b6c0bff2bb6",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "WBTC",
+      "name": "WBTC",
+      "chains": {
+        "bnb": {
+          "address": "0x43359676E1A3F9FbB5de095333f8e9c1B46dFA44"
+        },
+        "solana": {
+          "address": "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Ethereum",
+        "address": "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:461922e8d2a85eb15f58ceb00aeb6ed3a29f9d63",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "USDT",
+      "name": "USDT",
+      "chains": {
+        "bnb": {
+          "address": "0x524bC91Dc82d6b90EF29F76A3ECAaBAffFD490Bc"
+        },
+        "solana": {
+          "address": "Dn4noZ5jgGfkntzcQSUZ8czkreiZ1ForXYoV2H8Dm7S1"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Ethereum",
+        "address": "0xdac17f958d2ee523a2206206994597c13d831ec7"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:657032ddead8e0a51c014cb5b34b598ee9c567c8",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "DAI",
+      "name": "DAI",
+      "chains": {
+        "bnb": {
+          "address": "0x3413a030EF81a3dD5a302F4B4D11d911e12ed337"
+        },
+        "solana": {
+          "address": "EjmyN6qEC1Tf1JxiG1ae7UTJhUxSwk1TCWNWqxWV4J6o"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Ethereum",
+        "address": "0x6b175474e89094c44da98b954eedeac495271d0f"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:db004aef58c96962a2d2fa6d27d72f92f9f6fb3c",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "BUSD",
+      "name": "BUSD",
+      "chains": {
+        "bnb": {
+          "address": "0x035de3679E692C471072d1A09bEb9298fBB2BD31"
+        },
+        "solana": {
+          "address": "33fsBLA8djQm82RpHmE3SuVrPGtZBWNYExsEUeKX1HXX"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Ethereum",
+        "address": "0x4fabb145d64652a948d72533023f6e7a623c7c53"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:30d8b53e7f1a72ae0ff8fe76574e481bb86bc86b",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "wstETH",
+      "name": "wstETH",
+      "chains": {
+        "bnb": {
+          "address": "0xad80E1A9B5824234afA9dE1F3bbDb8a994796169"
+        },
+        "solana": {
+          "address": "ZScHuTtqZukUrtZS43teTKGs2VqkKL8k4QCouR2n6Uo"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Ethereum",
+        "address": "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:29adf8125f83d0a907b6c7a8bb24aeb2bdf90742",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "WPOL",
+      "name": "WPOL",
+      "chains": {
+        "bnb": {
+          "address": "0xc836d8dC361E44DbE64c4862D55BA041F88Ddd39"
+        },
+        "solana": {
+          "address": "Gz7VkD4MacbEB6yC5XD3HcumEiYx2EtDYYrfikGsvopG"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Polygon",
+        "address": "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:d238ffe6c179c95b4cbd46b9b46d7be239450ef3",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "WETH",
+      "name": "WETH",
+      "chains": {
+        "bnb": {
+          "address": "0x1384284E16e3375522Be54F50909Bc52A69e90e4"
+        },
+        "solana": {
+          "address": "DQyeU3oFezEGia761GQ4iPcMCnxnH8fuLrmHZUvTYuby"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Polygon",
+        "address": "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:1d28cd147a0c98a8f2fc717a2c8b90db0b0356df",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "USDC",
+      "name": "USDC",
+      "chains": {
+        "bnb": {
+          "address": "0xe6d82Bbe75041E42E51d755e922cE1BA91af9c4d"
+        },
+        "solana": {
+          "address": "C321jHPwWBzgfSGndosDTp5pBsiXPyMU1irxKLVcedRB"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Polygon",
+        "address": "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:1235315132c44c3c044c0eb2f7cf76f645b15e2c",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "WBNB",
+      "name": "WBNB",
+      "chains": {
+        "bnb": {
+          "address": "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c"
+        },
+        "solana": {
+          "address": "9gP2kCy3wA1ctvYWQk75guqXuHfrEomqydHLtcTCqiLa"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Bsc",
+        "address": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:77e59d3ff4b6054df8e47d62c7f25e8f379ab953",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "USDC",
+      "name": "USDC",
+      "chains": {
+        "bnb": {
+          "address": "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d"
+        },
+        "solana": {
+          "address": "FCqfQSujuPxy6V42UvafBhsysWtEq1vhjfMN1PUbgaxA"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Bsc",
+        "address": "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:245a07bf8b8c7ec1a7a6fef6b8fa9bb6896911c2",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "WETH",
+      "name": "WETH",
+      "chains": {
+        "bnb": {
+          "address": "0x2170Ed0880ac9A755fd29B2688956BD959F933F8"
+        },
+        "solana": {
+          "address": "FzjTz2cD1DfqYvafrbHWZvf1dK9qjwXGLuaU7xYXQjxP"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Bsc",
+        "address": "0x2170ed0880ac9a755fd29b2688956bd959f933f8"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:e43539188db123b8558953562e0024097cc9944e",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "WAVAX",
+      "name": "WAVAX",
+      "chains": {
+        "bnb": {
+          "address": "0x96412902aa9aFf61E13f085e70D3152C6ef2a817"
+        },
+        "solana": {
+          "address": "KgV1GvrHQmRBY8sHQQeUKwTm2r2h8t4C8qt12Cw1HVE"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Avalanche",
+        "address": "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:8936edde9e5fba70773fa1e46cf76ec37bfae8f9",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "USDC",
+      "name": "USDC",
+      "chains": {
+        "bnb": {
+          "address": "0xc88Dc63bf0c8c8198C97Db0945E3eF25Ca89A8e4"
+        },
+        "solana": {
+          "address": "FHfba3ov5P3RjaiLVgh8FTv4oirxQDoVXuoUUDvHuXax"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Avalanche",
+        "address": "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:3877c84281d43ac8ba8dccdede9481105f2c30b1",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "WETH",
+      "name": "WETH",
+      "chains": {
+        "bnb": {
+          "address": "0xBDfe278268524de38Da89B3023C1F49deBDFdA8A"
+        },
+        "solana": {
+          "address": "F9B9qLwUN3TAWGV9EGsuzFzS2PxWvKAmLhvfeqYNaS7J"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Avalanche",
+        "address": "0x49d5c2bdffac6ce2bfdb6640f4f80f226bc10bab"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:812a17b079167db7d3b9794e5af9117d10af726c",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "",
+      "name": "Wormhole Fantom asset",
+      "chains": {
+        "bnb": {
+          "address": "0xbF8413EE8612E0E4f66Aa63B5ebE27f3C5883d47"
+        },
+        "solana": {
+          "address": "DRQBDBEWmwWGK13fRTLhSPzjbvMSUavhV6nW4RUH8W6T"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Fantom",
+        "address": "0x21be370d5312f44cb42ce377bc9b8a0cef1a4c83"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:f85422f4c299edd54185fe9864fb35af374a99e2",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "CELO",
+      "name": "CELO",
+      "chains": {
+        "bnb": {
+          "address": "0x2A335e327a55b177f5B40132fEC5D7298aa0D7e6"
+        },
+        "solana": {
+          "address": "9kvAcwQbqejuJMd59mKuw2bfSsLRaQ7zuvaTVHEeBBec"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Celo",
+        "address": "0x471ece3750da237f93b8e339c536989b8978a438"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:eb8d9c026b2112d876c5346088e87ecceaa714f4",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "WGLMR",
+      "name": "WGLMR",
+      "chains": {
+        "bnb": {
+          "address": "0x1C063db3c621BF901FC6C1D03328b08b2F9bbfba"
+        },
+        "solana": {
+          "address": "7ixSaXGsHAFy34wogPk2YXiUX3BMmQMFdercdaHLnBby"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Moonbeam",
+        "address": "0xacc15dc74880c9944775448304b263d191c6077f"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:c751e27bc7bd3d4ed18c8ad707814b0857ec20da",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "SOL",
+      "name": "SOL",
+      "chains": {
+        "bnb": {
+          "address": "0xfA54fF1a158B5189Ebba6ae130CEd6bbd3aEA76e"
+        },
+        "solana": {
+          "address": "So11111111111111111111111111111111111111112"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Solana",
+        "address": "So11111111111111111111111111111111111111112"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:551ec455f1a82dfaa98ba1a7fa27bb633a9698bd",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "USDC",
+      "name": "USDC",
+      "chains": {
+        "bnb": {
+          "address": "0x91Ca579B0D47E5cfD5D0862c21D5659d39C8eCf0"
+        },
+        "solana": {
+          "address": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Solana",
+        "address": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:ec40b69930c19325359b865186bad8006d80977f",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "PYTH",
+      "name": "PYTH",
+      "chains": {
+        "bnb": {
+          "address": "0xb0188B0bb2cD4a6D2744637fC83C94a284B247Da"
+        },
+        "solana": {
+          "address": "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Solana",
+        "address": "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:898e6ec8b3b9a61f946c3f9e22768dc37d93beb1",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "SUI",
+      "name": "SUI",
+      "chains": {
+        "bnb": {
+          "address": "0x8314f6Bf1B4dd8604A0fC33C84F9AF2fc07AABC8"
+        },
+        "solana": {
+          "address": "G1vJEgzepqhnVu35BN4jrkv3wVwkujYWFFCxhbEZ1CZr"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Sui",
+        "address": "native"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:d7f0269d010c428f5829fd66d3ba62bc1d390049",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "APT",
+      "name": "APT",
+      "chains": {
+        "bnb": {
+          "address": "0x2Ba98cf7Edd2c5C794e21bc3Dc6973D3C2585eE3"
+        },
+        "solana": {
+          "address": "6LNeTYMqtNm1pBFN8PfhQaoLyegAH8GD32WmHU9erXKN"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Aptos",
+        "address": "native"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:1b77710ac8645c2921718675110ff7c75eb327cf",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "WETH",
+      "name": "WETH",
+      "chains": {
+        "bnb": {
+          "address": "0xaA1eEdABC48D078350ccBdD620bD088848e299E5"
+        },
+        "solana": {
+          "address": "CSD6JQMvLi46psjHdpfFdr826mF336pEVMJgjwcoS1m4"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Arbitrum",
+        "address": "0x82af49447d8a07e3bd95bd0d56f35241523fbab1"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:e9ee6c30dfd4eff5af83a08bfec1c7852887fda6",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "USDC",
+      "name": "USDC",
+      "chains": {
+        "bnb": {
+          "address": "0x5caa170b465122D15a6D20FD9A804a9613CE7882"
+        },
+        "solana": {
+          "address": "CR4xnGrhsu1fWNPoX4KbTUUtqGMF3mzRLfj4S6YEs1Yo"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Arbitrum",
+        "address": "0xaf88d065e77c8cc2239327c5edb3a432268e5831"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:9574009bd7e8130fca91955d5c1edd23aa53ff15",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "wstETH",
+      "name": "wstETH",
+      "chains": {
+        "bnb": {
+          "address": "0x159167e842C586a81f02E55bc043AC8EdB033E0b"
+        },
+        "solana": {
+          "address": "8wJakbZuv7WApfHmRo2sdkeQfu6hXqfEqjb7BYXDKpKe"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Arbitrum",
+        "address": "0x5979d7b546e38e414f7e9822514be443a4800529"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:c3278b9598eb48b39b069be8ff7e1e05129202c6",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "WETH",
+      "name": "WETH",
+      "chains": {
+        "bnb": {
+          "address": "0x94AEc09B5e2CE591e39DC6aa58A3A6E85Ed45265"
+        },
+        "solana": {
+          "address": "8M6d63oL7dvMZ1gNbgGe3h8afMSWJEKEhtPTFM2u8h3c"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Optimism",
+        "address": "0x4200000000000000000000000000000000000006"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:24504bc7077ddcbf6054dd1d9157f0afb787aafa",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "USDC",
+      "name": "USDC",
+      "chains": {
+        "bnb": {
+          "address": "0xa41ae127D04F7ee73B5058E2C60Fb7c7A2D21F79"
+        },
+        "solana": {
+          "address": "J8kcD4Wnd1ehne1dpL8WNtgZQR6Jpui2cTZcrmg5ybAa"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Optimism",
+        "address": "0x0b2c639c533813f4aa9d7837caf62653d097ff85"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:a9fe8a2f95f8e20bd709b9d83698ef020e733222",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "WETH",
+      "name": "WETH",
+      "chains": {
+        "bnb": {
+          "address": "0x9dc152F4941cE1A138326e70c3600385bf0C22dD"
+        },
+        "solana": {
+          "address": "DWXe1hxpnb8LAH21iyXcjvMbiAGzoYyuCVQtRLvZdLYd"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Base",
+        "address": "0x4200000000000000000000000000000000000006"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:e8b00e1ec5eeeb1951721323f613227e1364c758",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "USDC",
+      "name": "USDC",
+      "chains": {
+        "bnb": {
+          "address": "0x55CaD531c8E303Cab8B3BE4bB4744Db4f896ac81"
+        },
+        "solana": {
+          "address": "EfqRM8ZGWhDTKJ7BHmFvNagKVu3AxQRDQs8WMMaoBCu6"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Base",
+        "address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    },
+    {
+      "id": "wormhole:6e63d324c4bfef72b72f3d0b629419288d90b415",
+      "source": "wormhole",
+      "sourceRef": "https://github.com/wormhole-foundation/wormhole-connect/blob/267c9a649c74097cdbf5096d1d37cb45e7695a5b/src/config/mainnet/wrappedTokens.ts",
+      "symbol": "wKAIA",
+      "name": "wKAIA",
+      "chains": {
+        "bnb": {
+          "address": "0xEA970e7b7D131Ea36c3051C9Ca11e785462fE00c"
+        },
+        "solana": {
+          "address": "2b8fZGLBZjpxFugCdnJbbLLBYxvx23rsrsvLYYueiHb7"
+        }
+      },
+      "observedAt": 1775606400000,
+      "evidenceKind": "canonical-origin-map",
+      "riskNotice": "桥接包装资产，映射不是安全或可赎回证明",
+      "origin": {
+        "chain": "Klaytn",
+        "address": "0xe4f05a66ec68b54a58b17c22107b02e0232cc817"
+      },
+      "sourceKind": "bundled",
+      "sourceDate": "2026-04-08"
+    }
+  ]
+}

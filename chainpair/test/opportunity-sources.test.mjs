@@ -112,7 +112,7 @@ test('429 Retry-After is clamped and returned without automatically retrying', a
 test('auth, explicit rejection and network exceptions cannot leak remote messages or response bodies', async () => {
   const secret = 'do-not-echo-sensitive-provider-text';
   for (const status of [401, 403]) await assert.rejects(client(async () => new Response(secret, { status })).discover(), error => error.code === 'DISCOVERY_AUTH' && !error.message.includes(secret));
-  await assert.rejects(client(async () => new Response(secret, { status: 500 })).discover(), { safe: true, code: 'DISCOVERY_REJECTED' });
+  await assert.rejects(client(async () => new Response(secret, { status: 500 })).discover(), { safe: true, code: 'DISCOVERY_UNAVAILABLE' });
   await assert.rejects(client(async () => json({ error: secret })).discover(), error => error.code === 'DISCOVERY_REJECTED' && !error.message.includes(secret));
   const injected = Object.assign(new Error(secret), { safe: true, code: 'DISCOVERY_NETWORK' });
   await assert.rejects(client(async () => { throw injected; }).discover(), error => error.code === 'DISCOVERY_NETWORK' && error.message !== secret);

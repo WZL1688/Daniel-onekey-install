@@ -10,7 +10,7 @@ const dataDir = mkdtempSync(path.join(os.tmpdir(), 'chainpair-browser-'));
 const store = new Store(dataDir);
 store.saveTrade({ id: 'browser-recovery', mode: 'demo', type: 'arbitrage', status: 'BUY_SUBMITTING', amountUsd: 5 });
 store.close();
-const child = spawn(process.execPath, ['src/main.mjs'], { cwd: process.cwd(), env: { ...process.env, PORT: '0', DUALARB_DATA_DIR: dataDir }, stdio: ['pipe', 'pipe', 'pipe'] });
+const child = spawn(process.execPath, ['src/main.mjs'], { cwd: process.cwd(), env: { ...process.env, PORT: '0', DUALARB_DATA_DIR: dataDir, DUALARB_AUTO_SCAN: '0' }, stdio: ['pipe', 'pipe', 'pipe'] });
 let browser;
 const failures = [];
 try {

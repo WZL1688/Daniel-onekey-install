@@ -131,7 +131,7 @@ test('exact quote evaluation exposes only bounded public fields and expires; mis
   } finally { ctx.close(); }
 });
 
-test('persistent pre-dispatch requests include failures, six-hour directory cooldown and shared cross-instance quotas', async () => {
+test('persistent pre-dispatch requests include failures, bounded directory cooldown and shared cross-instance quotas', async () => {
   let ctx;
   ctx = setup({ discover: async () => { assert.equal(ctx.store.getMeta('opportunities.budget.v1').total, 1); throw new Error('private-api-key=do-not-echo'); } });
   let secondStore;

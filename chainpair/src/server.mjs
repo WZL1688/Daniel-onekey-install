@@ -60,8 +60,17 @@ export function createApp({engine,store,vault,browserWallets,reviewService,radar
   });
   app.get('/api/state',asyncRoute(async(req,res)=>res.json(await engine.snapshot())));
   app.get('/api/opportunities',asyncRoute(async(req,res)=>res.json({...opportunities().snapshot(),execution:coordinator().snapshot()})));
+  app.post('/api/opportunities/credentials',asyncRoute(async(req,res)=>{
+    const service=opportunities();if(typeof service.credentialsChanged!=='function')throw safe('目录凭证服务未启用，请更新并重启程序');
+    const result=vault.setCoinGeckoCredentials({apiKey:req.body?.apiKey,password:req.body?.password});
+    await service.credentialsChanged();res.json(result);
+  }));
+  app.delete('/api/opportunities/credentials',asyncRoute(async(req,res)=>{
+    const service=opportunities();if(typeof service.credentialsChanged!=='function')throw safe('目录凭证服务未启用，请更新并重启程序');
+    const result=vault.clearCoinGeckoCredentials();await service.credentialsChanged();res.json(result);
+  }));
   app.post('/api/opportunities/discover',asyncRoute(async(req,res)=>{registryChange();res.json(await opportunities().discover());}));
-  app.post('/api/opportunities/scan',asyncRoute(async(req,res)=>res.json(await opportunities().scan())));
+  app.post('/api/opportunities/scan',asyncRoute(async(req,res)=>res.json(await opportunities().scan({refreshDirectory:true}))));
   app.post('/api/opportunities/enabled',asyncRoute(async(req,res)=>{if(req.body?.enabled)registryChange();res.json(await opportunities().setEnabled(req.body?.enabled));}));
   app.post('/api/opportunities/settings',asyncRoute(async(req,res)=>{registryChange();res.json(await opportunities().saveSettings(req.body?.settings));}));
   app.post('/api/opportunities/assets',asyncRoute(async(req,res)=>{registryChange();res.json(await opportunities().saveAsset(req.body?.asset));}));
@@ -163,8 +172,8 @@ export function createApp({engine,store,vault,browserWallets,reviewService,radar
     const body=req.body||{};clientId(body.clientId);if(typeof body.requestId!=='string'||body.requestId.length>100)throw safe('插件签名请求编号无效');
     await broker().resolve({clientId:body.clientId,requestId:body.requestId,result:body.result,error:body.error});res.json({ok:true});
   }));
-  app.post('/api/wallets/unlock',asyncRoute(async(req,res)=>{await withWalletChange(async()=>{vault.unlock(req.body?.password);scheduleWalletRefresh();});res.json(vault.publicStatus());}));
-  app.post('/api/wallets/lock',asyncRoute(async(req,res)=>{await withWalletChange(async()=>{vault.lock();await radarService?.credentialsChanged();});res.json(vault.publicStatus());}));
+  app.post('/api/wallets/unlock',asyncRoute(async(req,res)=>{await withWalletChange(async()=>{vault.unlock(req.body?.password);if(vault.publicStatus().coingeckoConfigured)await opportunityService?.credentialsChanged?.();scheduleWalletRefresh();});res.json(vault.publicStatus());}));
+  app.post('/api/wallets/lock',asyncRoute(async(req,res)=>{await withWalletChange(async()=>{vault.lock();await radarService?.credentialsChanged();await opportunityService?.credentialsChanged?.();});res.json(vault.publicStatus());}));
   app.post('/api/okx/credentials',asyncRoute(async(req,res)=>{let result;await withWalletChange(async()=>{result=vault.setOkxCredentials(req.body);scheduleWalletRefresh();});res.json(result);}));
   app.post('/api/bridge/quote',asyncRoute(async(req,res)=>{
     const {fromChain,toChain,amountUsd}=req.body||{};
