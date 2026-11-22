@@ -14,7 +14,7 @@ const WSOL = 'So11111111111111111111111111111111111111112';
 const KEY = 'diagnostic-key-must-stay-local';
 const CHAINS = {
   bnb: { address: '0x1111111111111111111111111111111111111111', decimals: 18, poolAddress: '0x2222222222222222222222222222222222222222' },
-  solana: { address: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', decimals: 6, poolAddress: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN' },
+  solana: { address: '2RJD1KnDRGEkvuFfAGrJ7PD28LRE9LRDjZznDywagzmr', decimals: 6, poolAddress: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN' },
 };
 const directoryResult = () => [{ id: 'coingecko:diagnostic-only', name: 'Must not be imported by diagnostics', symbol: 'PROBE', source: 'coingecko', chains: CHAINS }];
 
@@ -41,7 +41,7 @@ function setup(t, { client: clientOverrides = {}, saveSettings, vault: vaultOver
       track(options.chain, options);
       return options.addresses.map(tokenAddress => ({ chain: options.chain, tokenAddress, poolAddress: CHAINS[options.chain].poolAddress,
         quoteAddress: options.chain === 'bnb' ? '0x4444444444444444444444444444444444444444' : WSOL,
-        priceUsd: options.chain === 'bnb' ? .01 : .012, liquidityUsd: 100000, volume24hUsd: 500000, observedAt: clock, dexId: 'fixture' }));
+        priceUsd: options.chain === 'bnb' ? .01 : .012, liquidityUsd: 100000, volume24hUsd: 500000, volume1hUsd: 2000, trades1h: 20, observedAt: clock, dexId: 'fixture' }));
     },
     ...clientOverrides,
   };

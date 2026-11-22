@@ -7,7 +7,7 @@ import { Store } from '../src/store.mjs';
 import { OpportunityService } from '../src/opportunities/service.mjs';
 
 const start = Date.parse('2026-11-20T08:00:00Z');
-const addresses = { bnb: '0x1111111111111111111111111111111111111111', solana: 'So11111111111111111111111111111111111111112' };
+const addresses = { bnb: '0x1111111111111111111111111111111111111111', solana: '2RJD1KnDRGEkvuFfAGrJ7PD28LRE9LRDjZznDywagzmr' };
 const pools = { bnb: '0x2222222222222222222222222222222222222222', solana: '11111111111111111111111111111111' };
 function fixture({ failDirectory = false } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'autodiscovery-regression-')), store = new Store(dir), calls = [];
@@ -22,7 +22,7 @@ function fixture({ failDirectory = false } = {}) {
     pools: async ({ chain, addresses: requested }) => {
       calls.push(`pools:${chain}`);
       return requested.map(tokenAddress => ({ chain, tokenAddress, poolAddress: pools[chain], quoteAddress: store.config.chains[chain].stableAddress,
-        priceUsd: chain === 'bnb' ? .01 : .012, liquidityUsd: 100000, volume24hUsd: 100000, observedAt: clock, sourceUpdatedAt: null, dexId: 'fixture' }));
+        priceUsd: chain === 'bnb' ? .01 : .012, liquidityUsd: 100000, volume24hUsd: 100000, volume1hUsd: 2000, trades1h: 20, observedAt: clock, sourceUpdatedAt: null, dexId: 'fixture' }));
     }
   };
   const service = new OpportunityService({ store, client, now, sleep: async ms => { clock += ms; } });

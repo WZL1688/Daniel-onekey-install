@@ -1,6 +1,8 @@
 import { getAddress } from 'ethers';
 import { PublicKey } from '@solana/web3.js';
 import { WORMHOLE_WRAPPED_URL, normalizeWrappedMapping } from './wormhole.mjs';
+import { PAPRIKA_PLATFORMS, normalizeContractCatalog } from './catalogs.mjs';
+import { classifyAsset } from './universe.mjs';
 
 // Independent, read-only clients for the documented CoinGecko coin directory
 // and DexScreener token-pool lookup APIs. The caller owns request scheduling.
@@ -63,25 +65,34 @@ export function normalizeDiscovery(rows, { observedAt = Date.now(), limit = 200 
   }
   // Check the full bounded directory before taking a page: a later conflicting
   // entry cannot escape quarantine just because it follows the first200 rows.
-  return [...byId.entries()].filter(([id, item]) => item.candidate && !conflicts.has(id)).map(([, item]) => item.candidate).slice(0, limit);
+  return [...byId.entries()].filter(([id, item]) => item.candidate && !conflicts.has(id)).map(([, item]) => item.candidate)
+    .sort((a,b) => Number(classifyAsset(b).eligible) - Number(classifyAsset(a).eligible)).slice(0, limit);
 }
 
-/** priceUsd denotes the BASE token only; quote-token prices are never inferred. */
+/** quote-side USD price is base USD / priceNative, never the base USD itself. */
 export function normalizePools(rows, { chain, addresses, observedAt = Date.now() } = {}) {
   if (!chainKey(chain) || !Array.isArray(rows) || rows.length > 10000 || !validTime(observedAt) || !Array.isArray(addresses)) throw safeError('交易池行情格式无效', 'DISCOVERY_FORMAT');
   const requested = new Set(addresses.map(value => addressFor(chain, value)).filter(Boolean).map(address => addressKey(chain, address)));
   const normalized = new Map(), conflicts = new Set();
   for (const row of rows) {
     if (!row || typeof row !== 'object' || Array.isArray(row) || row.chainId !== CHAINS[chain]) continue;
-    const tokenAddress = addressFor(chain, row.baseToken?.address), poolAddress = addressFor(chain, row.pairAddress), quoteAddress = addressFor(chain, row.quoteToken?.address);
-    const priceUsd = numeric(row.priceUsd, true);
-    if (!tokenAddress || !poolAddress || !quoteAddress || priceUsd === null || !requested.has(addressKey(chain, tokenAddress)) || addressKey(chain, tokenAddress) === addressKey(chain, quoteAddress)) continue;
-    const result = { chain, tokenAddress, poolAddress, quoteAddress, priceUsd,
-      liquidityUsd: numeric(row.liquidity?.usd), volume24hUsd: numeric(row.volume?.h24),
-      observedAt, sourceUpdatedAt: null, dexId: text(row.dexId, 64) };
-    const key = addressKey(chain, poolAddress), prior = normalized.get(key);
-    if (prior) { if (JSON.stringify(prior) !== JSON.stringify(result)) conflicts.add(key); }
-    else normalized.set(key, result);
+    const baseAddress = addressFor(chain, row.baseToken?.address), poolAddress = addressFor(chain, row.pairAddress), pairedAddress = addressFor(chain, row.quoteToken?.address);
+    const baseUsd = numeric(row.priceUsd, true), nativePrice = numeric(row.priceNative, true);
+    if (!baseAddress || !poolAddress || !pairedAddress || baseUsd === null || addressKey(chain, baseAddress) === addressKey(chain, pairedAddress)) continue;
+    const baseRequested = requested.has(addressKey(chain, baseAddress)), quoteRequested = requested.has(addressKey(chain, pairedAddress));
+    if (!baseRequested && (!quoteRequested || nativePrice === null)) continue;
+    const directions = [];
+    if (baseRequested) directions.push({ tokenAddress: baseAddress, quoteAddress: pairedAddress, priceUsd: baseUsd });
+    if (quoteRequested && nativePrice !== null && Number.isFinite(baseUsd / nativePrice) && baseUsd / nativePrice > 0) directions.push({ tokenAddress: pairedAddress, quoteAddress: baseAddress, priceUsd: baseUsd / nativePrice });
+    for (const direction of directions) {
+      const result = { chain, ...direction, poolAddress,
+        liquidityUsd: numeric(row.liquidity?.usd), volume24hUsd: numeric(row.volume?.h24), volume1hUsd: numeric(row.volume?.h1),
+        trades1h: Number.isSafeInteger(row.txns?.h1?.buys) && row.txns.h1.buys >= 0 && Number.isSafeInteger(row.txns?.h1?.sells) && row.txns.h1.sells >= 0 && Number.isSafeInteger(row.txns.h1.buys + row.txns.h1.sells) ? row.txns.h1.buys + row.txns.h1.sells : null,
+        observedAt, sourceUpdatedAt: null, dexId: text(row.dexId, 64) };
+      const key = `${addressKey(chain, result.tokenAddress)}:${addressKey(chain, poolAddress)}`, prior = normalized.get(key);
+      if (prior) { if (JSON.stringify(prior) !== JSON.stringify(result)) conflicts.add(key); }
+      else normalized.set(key, result);
+    }
   }
   return [...normalized.entries()].filter(([key]) => !conflicts.has(key)).map(([, row]) => row);
 }
@@ -168,6 +179,12 @@ export class DiscoveryClient {
   async discoverWrapped({ signal } = {}) {
     const content = await this.#get(WORMHOLE_WRAPPED_URL, { signal, maxBytes: 256 * 1024, rawText: true });
     return normalizeWrappedMapping(content, { observedAt: this.now() });
+  }
+  async contracts({ chain, signal } = {}) {
+    if (!Object.hasOwn(PAPRIKA_PLATFORMS, chain)) throw safeError('合约目录链无效', 'DISCOVERY_FORMAT');
+    const body = await this.#get(`https://api.coinpaprika.com/v1/contracts/${PAPRIKA_PLATFORMS[chain]}`, { signal, maxBytes: 8 * 1024 * 1024, maxRows: 50000 });
+    try { return normalizeContractCatalog(body, { chain }); }
+    catch { throw safeError('合约目录格式无效', 'DISCOVERY_FORMAT', { httpStatus: 200 }); }
   }
   async pools({ chain, addresses, signal } = {}) {
     const remoteChain = chainKey(chain);

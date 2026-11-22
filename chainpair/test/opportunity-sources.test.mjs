@@ -58,7 +58,7 @@ function publicKeyFor(index) {
   return new PublicKey(bytes).toBase58();
 }
 
-test('pool lookup accepts only requested exact-chain base tokens, never infers quote prices', () => {
+test('pool lookup accepts requested exact-chain tokens and requires a ratio for quote-side prices', () => {
   const result = normalizePools([
     pool(), pool({ chainId: 'solana' }), pool({ pairAddress: 'https://malicious.invalid' }),
     pool({ baseToken: { address: anotherBnb }, quoteToken: { address: bnb } }),
@@ -66,7 +66,7 @@ test('pool lookup accepts only requested exact-chain base tokens, never infers q
     pool({ baseToken: { address: anotherBnb } }), pool({ priceUsd: 0 }),
   ], { chain: 'bnb', addresses: [bnb], observedAt: now });
   assert.equal(result.length, 1);
-  assert.deepEqual(result[0], { chain: 'bnb', tokenAddress: bnb, poolAddress: bnbPool, quoteAddress: bnbQuote, priceUsd: .01234, liquidityUsd: 40000, volume24hUsd: 20000, observedAt: now, sourceUpdatedAt: null, dexId: 'pancakeswap' });
+  assert.deepEqual(result[0], { chain: 'bnb', tokenAddress: bnb, poolAddress: bnbPool, quoteAddress: bnbQuote, priceUsd: .01234, liquidityUsd: 40000, volume24hUsd: 20000, volume1hUsd: null, trades1h: null, observedAt: now, sourceUpdatedAt: null, dexId: 'pancakeswap' });
 });
 
 test('Solana pool identities remain exact and missing liquidity stays unknown rather than a passing zero', () => {

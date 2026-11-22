@@ -7,7 +7,7 @@ const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp
 const chainName = chain => chain === 'bnb' ? 'BNB Chain' : 'Solana';
 const shortChain = chain => chain === 'bnb' ? 'BNB' : 'SOL';
 const chainKeys = ['bnb', 'solana'];
-const APP_UI_VERSION = '1.5.2';
+const APP_UI_VERSION = '1.6.0';
 const pageNames = {market:'行情首页',settings:'设置与钱包',bridge:'跨链',trades:'交易档案',notes:'备忘录'};
 const number = (value, decimals = 2) => value === undefined || value === null || !Number.isFinite(Number(value)) ? '—' : Number(value).toLocaleString('en-US', {minimumFractionDigits:decimals,maximumFractionDigits:decimals});
 const usd = (value, decimals = 4) => value === undefined || value === null || !Number.isFinite(Number(value)) ? '—' : '$' + number(value,decimals);

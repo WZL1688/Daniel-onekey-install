@@ -12,7 +12,8 @@ const bnb = '0x1111111111111111111111111111111111111111';
 const otherBnb = '0x2222222222222222222222222222222222222222';
 const bnbPool = '0x3333333333333333333333333333333333333333';
 const bnbQuote = '0x4444444444444444444444444444444444444444';
-const solana = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+// Synthetic public mint; known USDC is intentionally excluded by the radar.
+const solana = '2RJD1KnDRGEkvuFfAGrJ7PD28LRE9LRDjZznDywagzmr';
 const otherSolana = 'So11111111111111111111111111111111111111112';
 const solanaPool = 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN';
 const chainDetails = { bnb: { address: bnb, decimals: 18, poolAddress: bnbPool }, solana: { address: solana, decimals: 6, poolAddress: solanaPool } };
@@ -22,7 +23,7 @@ function setup(overrides = {}) {
   const calls = [], getConfig = () => store.config;
   const client = {
     discover: async () => { calls.push(['discover']); return [directory()]; },
-    pools: async ({ chain, addresses }) => { calls.push(['pools', chain, addresses]); return addresses.map(address => ({ chain, tokenAddress: address, poolAddress: chain === 'bnb' ? bnbPool : solanaPool, quoteAddress: chain === 'bnb' ? bnbQuote : otherSolana, priceUsd: chain === 'bnb' ? .01 : .012, liquidityUsd: 50000, volume24hUsd: 100000, observedAt: clock, sourceUpdatedAt: null, dexId: chain === 'bnb' ? 'pancakeswap' : 'raydium' })); }, ...overrides,
+    pools: async ({ chain, addresses }) => { calls.push(['pools', chain, addresses]); return addresses.map(address => ({ chain, tokenAddress: address, poolAddress: chain === 'bnb' ? bnbPool : solanaPool, quoteAddress: chain === 'bnb' ? bnbQuote : otherSolana, priceUsd: chain === 'bnb' ? .01 : .012, liquidityUsd: 50000, volume24hUsd: 100000, volume1hUsd: 2000, trades1h: 20, observedAt: clock, sourceUpdatedAt: null, dexId: chain === 'bnb' ? 'pancakeswap' : 'raydium' })); }, ...overrides,
   };
   const now = () => clock, sleep = async ms => { clock += ms; };
   const service = new OpportunityService({ store, client, getConfig, now, sleep });

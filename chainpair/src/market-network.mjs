@@ -4,7 +4,7 @@ import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from 'undi
 
 const META_KEY = 'market.network.v1';
 const DETECTION_TTL = 60000;
-const HOSTS = ['api.coingecko.com', 'api.dexscreener.com', 'raw.githubusercontent.com', 'prod.ave-api.com'];
+const HOSTS = ['api.coingecko.com', 'api.coinpaprika.com', 'api.dexscreener.com', 'raw.githubusercontent.com', 'prod.ave-api.com'];
 const MODES = new Set(['auto', 'direct', 'proxy']);
 const runFile = promisify(execFile);
 const registryKey = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings';

@@ -10,7 +10,7 @@ import { OpportunityService } from '../src/opportunities/service.mjs';
 import { InventoryCoordinator } from '../src/opportunities/coordinator.mjs';
 import { startLocalServer } from '../src/server.mjs';
 
-const chains = { bnb: { address: '0x1111111111111111111111111111111111111111', decimals: 18, poolAddress: '0x2222222222222222222222222222222222222222' }, solana: { address: 'So11111111111111111111111111111111111111112', decimals: 9, poolAddress: '11111111111111111111111111111111' } };
+const chains = { bnb: { address: '0x1111111111111111111111111111111111111111', decimals: 18, poolAddress: '0x2222222222222222222222222222222222222222' }, solana: { address: '2RJD1KnDRGEkvuFfAGrJ7PD28LRE9LRDjZznDywagzmr', decimals: 9, poolAddress: '11111111111111111111111111111111' } };
 async function fixture(t, { rejectPools = false } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'opportunities-api-')), store = new Store(dir), vault = new Vault(dir);
   const engine = new Engine({ store, vault }); await engine.init(); engine.stop();
@@ -20,7 +20,7 @@ async function fixture(t, { rejectPools = false } = {}) {
     pools: async ({ chain, addresses }) => {
       calls.push(chain);
       if (rejectPools) throw Object.assign(new Error('private provider text must never appear'), { code: 'DISCOVERY_AUTH' });
-      return addresses.map(tokenAddress => ({ chain, tokenAddress, poolAddress: chains[chain].poolAddress, quoteAddress: store.config.chains[chain].stableAddress, priceUsd: chain === 'bnb' ? .0124 : .0131, liquidityUsd: 100000, volume24hUsd: 500000, observedAt: clock, dexId: 'fixture' }));
+      return addresses.map(tokenAddress => ({ chain, tokenAddress, poolAddress: chains[chain].poolAddress, quoteAddress: store.config.chains[chain].stableAddress, priceUsd: chain === 'bnb' ? .0124 : .0131, liquidityUsd: 100000, volume24hUsd: 500000, volume1hUsd: 2000, trades1h: 20, observedAt: clock, dexId: 'fixture' }));
     }
   };
   const scanner = new OpportunityService({ store, getConfig: () => engine.config, client, now: () => clock, sleep: async ms => { clock += ms; } });
