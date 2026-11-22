@@ -1,6 +1,6 @@
 # 验证记录
 
-版本：1.5.1。验证日期：2026-11-22。环境：Node.js v24.19.0 / Linux / Chromium。
+版本：1.5.2。验证日期：2026-11-22。环境：Node.js v24.19.0 / Linux / Chromium。
 
 ## 自动测试
 
@@ -95,3 +95,14 @@ Windows自动打开浏览器使用注入接口验证命令和端口传递；未�
 七组浏览器流程通过：test:ui、test:wallet-ui、test:review-ui、test:radar-ui、test:opportunities-ui、test:automatic-scanner-ui、test:network-ui。新增流程覆盖手动HTTP端口校验、自动状态不假报连接、未保存草稿、三路HTTP／DNS等诊断与时间、安全复制、切页迟到响应、390px布局和无交易／钱包副作用。
 
 本开发环境允许GitHub等开发域名，但限制api.coingecko.com及api.dexscreener.com；此处不能完成真实公开行情源联通验收。已在允许的GitHub域名上验证默认Node fetch与启用环境代理的差别；这能验证代理支持缺口，不能单凭用户TIMEOUT确定其网络根因。未使用用户私钥、真实API账户或资金，未声称找到真实可成交机会。
+
+
+## v1.5.2 完整包与版本确认
+
+将此前自动发现、代理、连接诊断与原钱包／执行／跨链／档案／复盘／备忘录功能打入同一个完整源代码包。版本文件名与解压根目录均为ChainPair-v1.5.2，保留latest别名，帮助避免覆盖部分文件后继续运行旧目录。版本号从应用模块相对的package.json读取，终端输出版本和程序目录；受原会话保护的/api/state返回appVersion，并在响应头带X-ChainPair-Version。
+
+页面顶部显示当前服务版本；前后端版本不一致时提示刷新或关闭旧进程、重新启动完整目录；旧模拟fixture缺少版本字段时仅显示页面版本，不声称已核对服务版本。浏览器验证匹配、不匹配、字段缺失、刷新按钮和390px布局。停止扫描文案改为明确的“点击开启自动发现与扫描”，实际自动启动与持久偏好逻辑保持原行为。独立四状态检查覆盖首次默认开启、环境变量禁止本次启动、保存关闭选择与保存开启选择；无远端API请求。
+
+本次没有新增真实行情或资金验收。仍需用户在实际电脑核对版本、扫描开关及三路API连通，不能将完整打包或自动测试通过当作发现真实收益的证明。
+
+v1.5.2复核结果：npm test为287/287，npm run check与启动脚本语法检查通过；七组浏览器流程test:ui、test:wallet-ui、test:review-ui、test:radar-ui、test:opportunities-ui、test:automatic-scanner-ui、test:network-ui全部通过，含390px布局。

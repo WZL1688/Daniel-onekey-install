@@ -368,7 +368,7 @@ export class OpportunityService {
   snapshot() {
     const gate = this.budget.check(this.settings, this.assets.size ? 'pools' : 'directory'), budget = this.budget.read();
     const rows = [...this.assets.values()].map(a => this.row(a)).sort((a,b) => (b.spreadBps || -1) - (a.spreadBps || -1));
-    let status = this.enabled ? 'monitoring' : 'stopped', reason = this.enabled ? '只读机会扫描已开启；交易须单独启用' : '自动扫描已关闭；重启后需手动开启';
+    let status = this.enabled ? 'monitoring' : 'stopped', reason = this.enabled ? '只读机会扫描已开启；交易须单独启用' : '自动扫描当前未运行；点击“开启自动发现与扫描”开始';
     if (this.busy) { status = 'loading'; reason = '正在读取只读同币目录或池行情'; }
     else if (!gate.allowed && ['clock','budget'].includes(gate.kind)) { status = 'cooldown'; reason = gate.reason; }
     else if (this.lastError) { status = 'error'; reason = this.lastError; }

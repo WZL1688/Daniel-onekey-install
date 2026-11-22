@@ -8,6 +8,8 @@ if errorlevel 1 (
 )
 node -e "if (24 > Number(process.versions.node.split('.')[0])) { console.error('Node.js 24 or newer is required'); process.exit(1) }"
 if errorlevel 1 (pause & exit /b 1)
+node -p "'ChainPair v' + require('./package.json').version"
+echo Program folder: %CD%
 node -e "try { if (require('undici/package.json').version !== require('./package.json').dependencies.undici) process.exit(1) } catch { process.exit(1) }"
 if errorlevel 1 (
   call npm ci --omit=dev --no-audit --no-fund

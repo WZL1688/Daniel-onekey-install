@@ -11,6 +11,7 @@ import { Vault } from '../src/vault.mjs';
 import { Store } from '../src/store.mjs';
 import { validateConfig, DEFAULT_CONFIG } from '../src/config.mjs';
 import { createApp, startLocalServer } from '../src/server.mjs';
+import { APP_VERSION } from '../src/version.mjs';
 
 const temp=()=>mkdtempSync(path.join(os.tmpdir(),'dualarb-test-'));
 const password='test-password-12345';
@@ -53,7 +54,8 @@ test('loopback API rejects foreign Host/Origin, unauthenticated reads and missin
   assert.equal((await fetch(`${url}/api/session`,{headers:{Origin:'http://evil.invalid'}})).status,403);
   const session=await fetch(`${url}/api/session`);const {csrfToken}=await session.json();const cookie=session.headers.get('set-cookie').split(';')[0];
   assert.match(session.headers.get('set-cookie'),/HttpOnly/);assert.match(session.headers.get('set-cookie'),/SameSite=Strict/);
-  assert.equal((await fetch(`${url}/api/state`,{headers:{Cookie:cookie}})).status,200);
+  const appState=await fetch(`${url}/api/state`,{headers:{Cookie:cookie}});
+  assert.equal(appState.status,200);assert.equal(appState.headers.get('x-chainpair-version'),APP_VERSION);assert.equal((await appState.json()).appVersion,APP_VERSION);
   assert.equal((await fetch(`${url}/api/config`,{method:'POST',headers:{Cookie:cookie,'Content-Type':'application/json'},body:'{}'})).status,403);
   const response=await fetch(`${url}/api/config`,{method:'POST',headers:{Cookie:cookie,'Content-Type':'application/json','X-CSRF-Token':csrfToken},body:'{}'});
   assert.equal(response.status,400);assert.equal((await response.text()).includes('do-not-expose'),false);

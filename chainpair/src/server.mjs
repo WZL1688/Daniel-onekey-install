@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { normalizeWalletAddress } from './vault.mjs';
+import { APP_VERSION } from './version.mjs';
 
 const isEqual=(a,b)=>{if(typeof a!=='string'||typeof b!=='string')return false;const left=Buffer.from(a),right=Buffer.from(b);return left.length===right.length&&timingSafeEqual(left,right);};
 const safe=(message)=>Object.assign(new Error(message),{safe:true});
@@ -10,6 +11,7 @@ const asyncRoute=(handler)=>(req,res,next)=>Promise.resolve(handler(req,res)).ca
 const cookieValue=(raw,name)=>{for(const cookie of (raw||'').split(';')){const i=cookie.indexOf('=');if(cookie.slice(0,i).trim()===name)return cookie.slice(i+1).trim();}return '';};
 export function createApp({engine,store,vault,browserWallets,reviewService,radarService,opportunityService,inventoryCoordinator,publicDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../public')}={}){
   const app=express();app.disable('x-powered-by');
+  app.use((req,res,next)=>{res.setHeader('X-ChainPair-Version',APP_VERSION);next();});
   const busy=()=>engine.busy||engine.snapshot()?.engine?.busy;
   let changingWallet=false;
   const clearPlans=()=>{engine.plan=null;engine.bridgeQuotes?.clear();};
@@ -58,7 +60,7 @@ export function createApp({engine,store,vault,browserWallets,reviewService,radar
     if(!['GET','HEAD'].includes(req.method)&&!isEqual(req.headers['x-csrf-token'],csrfToken))return res.status(403).json({error:'请求校验失败，请刷新页面'});
     next();
   });
-  app.get('/api/state',asyncRoute(async(req,res)=>res.json(await engine.snapshot())));
+  app.get('/api/state',asyncRoute(async(req,res)=>res.json({...(await engine.snapshot()),appVersion:APP_VERSION})));
   app.get('/api/opportunities',asyncRoute(async(req,res)=>res.json({...opportunities().snapshot(),execution:coordinator().snapshot()})));
   app.post('/api/opportunities/credentials',asyncRoute(async(req,res)=>{
     const service=opportunities();if(typeof service.credentialsChanged!=='function')throw safe('目录凭证服务未启用，请更新并重启程序');

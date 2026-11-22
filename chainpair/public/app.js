@@ -7,6 +7,7 @@ const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp
 const chainName = chain => chain === 'bnb' ? 'BNB Chain' : 'Solana';
 const shortChain = chain => chain === 'bnb' ? 'BNB' : 'SOL';
 const chainKeys = ['bnb', 'solana'];
+const APP_UI_VERSION = '1.5.2';
 const pageNames = {market:'行情首页',settings:'设置与钱包',bridge:'跨链',trades:'交易档案',notes:'备忘录'};
 const number = (value, decimals = 2) => value === undefined || value === null || !Number.isFinite(Number(value)) ? '—' : Number(value).toLocaleString('en-US', {minimumFractionDigits:decimals,maximumFractionDigits:decimals});
 const usd = (value, decimals = 4) => value === undefined || value === null || !Number.isFinite(Number(value)) ? '—' : '$' + number(value,decimals);
@@ -34,6 +35,18 @@ async function api(path, options = {}) {
 }
 function toast(message, error = false) {
   const element = document.createElement('div'); element.className = 'toast' + (error?' error':''); element.textContent = message; $('#toast-region').append(element); setTimeout(()=>element.remove(),6000);
+}
+function updateBuildVersion() {
+  const raw = state?.appVersion;
+  const version = typeof raw === 'string' && /^v?\d{1,3}\.\d{1,3}\.\d{1,3}(?:-[0-9A-Za-z.-]{1,40})?$/.test(raw.trim()) ? raw.trim().replace(/^v/, '') : '';
+  const badge = $('#app-build-version'), notice = $('#app-version-notice');
+  if (!badge || !notice) return;
+  const mismatch = Boolean(version && version !== APP_UI_VERSION);
+  badge.textContent = version ? `v${version}` : `页面 v${APP_UI_VERSION}`;
+  badge.className = `badge ${mismatch ? 'amber' : 'neutral'} app-build-version`;
+  badge.title = version ? `本机服务 v${version} · 当前页面 v${APP_UI_VERSION}` : `当前页面 v${APP_UI_VERSION}；本机服务未提供版本号`;
+  notice.hidden = !mismatch;
+  $('#app-version-message').textContent = mismatch ? `页面 v${APP_UI_VERSION} 与本机服务 v${version} 不一致。请按 Ctrl+F5 刷新；仍不一致时，关闭旧命令窗口，运行新版本启动文件，并打开新窗口显示的完整网址。` : '';
 }
 async function action(button, fn, success) {
   if(button?.disabled) return;
@@ -262,9 +275,10 @@ function setTab(name){if(!pageNames[name])name='market';if(name!=='market'){rada
 function renderTab(){if(tab==='market')renderMarket();if(tab==='settings')renderSettings();if(tab==='bridge')renderBridge();if(tab==='trades')renderTrades();if(tab==='notes')renderNotes();}
 document.addEventListener('click',event=>{const view=event.target.closest('[data-market-view]');if(view){event.preventDefault();marketView=['radar','opportunities'].includes(view.dataset.marketView)?view.dataset.marketView:'arbitrage';if(tab==='market')renderMarket();return;}const button=event.target.closest('[data-tab]');if(button){event.preventDefault();setTab(button.dataset.tab);}});
 $('#dialog-close').addEventListener('click',()=>$('#detail-dialog').close());$('#detail-dialog').addEventListener('click',event=>{if(event.target===$('#detail-dialog')){const r=event.target.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)event.target.close();}});
+$('#app-version-reload')?.addEventListener('click',()=>window.location.reload());
 async function refresh(){
   if(requestBusy)return;requestBusy=true;
-  try{state=await api('/api/state');walletConnector.syncServerState(state.wallets);updateWalletPanels();$('#server-dot').className='status-dot good';$('#server-status').textContent='本机服务已连接';$('#mode-badge').textContent=state.config.mode==='demo'?'模拟模式':'实盘模式';$('#mode-badge').className='badge '+(state.config.mode==='demo'?'amber':'green');
+  try{state=await api('/api/state');updateBuildVersion();walletConnector.syncServerState(state.wallets);updateWalletPanels();$('#server-dot').className='status-dot good';$('#server-status').textContent='本机服务已连接';$('#mode-badge').textContent=state.config.mode==='demo'?'模拟模式':'实盘模式';$('#mode-badge').className='badge '+(state.config.mode==='demo'?'amber':'green');
     chainKeys.forEach(chain=>{const m=state.market?.[chain],p=Number(m?.priceUsd);if(m&&Number.isFinite(p)&&p>0){const last=priceHistory[chain].at(-1);if(last!==p||priceHistory[chain].length<2){priceHistory[chain].push(p);if(priceHistory[chain].length>50)priceHistory[chain].shift();}}});
     if(state.engine?.activeTradeId){try{const r=await api(`/api/trades/${encodeURIComponent(state.engine.activeTradeId)}`);activeTrade=r.trade||r;}catch{activeTrade=null;}}else activeTrade=null;
     if(tab==='market'){if(marketView==='radar')void radarView.refresh();else if(marketView==='opportunities')void opportunitiesView.refresh();else renderMarket();}

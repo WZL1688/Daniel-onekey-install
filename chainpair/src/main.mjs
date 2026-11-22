@@ -15,10 +15,12 @@ import { bundledDirectory } from './opportunities/bundled.mjs';
 import { acquireRuntimeLock } from './runtime-lock.mjs';
 import { MarketNetwork } from './market-network.mjs';
 import { DiscoveryClient } from './opportunities/sources.mjs';
+import { APP_VERSION } from './version.mjs';
 
 const major = Number(process.versions.node.split('.')[0]);
 if (major < 24) throw new Error('请安装 Node.js 24 LTS 或更新版本');
 const projectDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+console.log(`ChainPair v${APP_VERSION}\n程序目录：${projectDir}`);
 const dataDir = path.resolve(process.env.DUALARB_DATA_DIR || path.join(projectDir, 'data'));
 mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 const runtimeLock = acquireRuntimeLock(dataDir);
@@ -42,6 +44,7 @@ const inventoryCoordinator = new InventoryCoordinator({ engine, scanner: opportu
 const { server, url } = await startLocalServer({ engine, store, vault, browserWallets, reviewService, radarService, opportunityService, inventoryCoordinator });
 console.log(`\n双链套利工作台已启动\n本机地址：${url}\n数据目录：${dataDir}\n模式：${engine.config.mode === 'demo' ? '演示（不会广播链上交易）' : '实盘（本机保险库需解锁；插件钱包需连接）'}\n按 Ctrl+C 退出。\n`);
 console.log('浏览器地址必须包含端口号；请使用上面显示的完整本机地址。');
+console.log(`只读自动扫描：${opportunityService.enabled ? '已开启；正在发现 BNB／Solana 候选并读取公开行情' : '当前关闭；请在“同币机会”点击“开启自动发现与扫描”'}。自动交易单独控制。`);
 if (process.argv.includes('--open') && !process.argv.includes('--no-open')) {
   const requested = await openBrowser(url);
   console.log(requested ? `已请求默认浏览器打开：${url}/` : `无法自动打开浏览器，请手动打开：${url}/`);
