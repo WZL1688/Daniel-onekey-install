@@ -1,10 +1,10 @@
 # 验证记录
 
-版本：1.5.0。验证日期：2026-11-20。环境：Node.js v24.19.0 / Linux / Chromium。
+版本：1.5.1。验证日期：2026-11-22。环境：Node.js v24.19.0 / Linux / Chromium。
 
 ## 自动测试
 
-`npm test`：247 / 247 通过；`npm run check`：通过。
+`npm test`：287 / 287 通过；`npm run check`：通过。
 
 覆盖顺序交易、确认前置、实际数量传递、单边失败暂停、持久化档案、重启不重播、执行互斥、配置及钱包身份变化并发、累计费用/储备、磨损与60/40再平衡、RPC轮换和主网身份、支持的ABI与实际回执归属。
 
@@ -82,3 +82,16 @@ Windows自动打开浏览器使用注入接口验证命令和端口传递；未�
 六组页面流程通过：`test:ui`、`test:wallet-ui`、`test:review-ui`、`test:radar-ui`、`test:opportunities-ui`、`test:automatic-scanner-ui`。新增页面覆盖HTTP200失败快照、长期错误提示、恢复后的扫描进度、无需交易批准即可查看参考候选、Key输入及时清空、固定官方来源、XSS、分页、390px及无意外执行请求。
 
 官方Wormhole映射原文件已实际取得并解析出32组双链候选。CoinGecko和DexScreener实时接口在本开发环境的联通尝试仍失败（DISCOVERY_NETWORK）；没有提供真实账户Key，没有完成实时价格、报价或真钱验收。测试和官方地址快照不能证明当前有流动性、机会或可实现收益。
+
+
+## v1.5.1 行情代理与连接检测
+
+修复 Node 行情客户端没有主动采用环境／Windows 系统代理的连接缺口。行情使用独立 undici dispatcher，不修改全局 fetch、RPC、OKX或钱包连接；支持自动、明确直连、用户指定带实际端口的本机 HTTP 代理。环境代理保留 NO_PROXY 和小写优先级，不回显／持久化环境代理凭据；Windows读取固定注册表项，读取失败要求用户选择明确连接方式，不执行PAC或猜测端口。保存网络设置取消旧扫描和检测，旧路由结果不能覆盖新配置；请求计数、429冷却、缓存和交易开关保留。
+
+新增40项自动测试：17项独立传输与23项扫描／API诊断测试。实际在本机启动 HTTP CONNECT 代理及TLS服务，子进程仅通过 NODE_EXTRA_CA_CERTS 信任一次性 localhost 测试证书，验证manual/env/direct独立连接、环境变量优先级、代理认证隔离、NO_PROXY、业务请求头、代理失败无直连回退、缺少信任与错误主机名拒绝。没有关闭TLS或向外部服务提交测试密钥。Windows注册表通过注入替身验证解析和错误处理，尚未在用户Windows电脑实机验收。
+
+只读诊断测试覆盖BNB WBNB、Solana WSOL与CoinGecko目录三路固定请求，共用持久预算；检测不导入候选、修改映射／报价／行情缓存或交易配置、不签名、不执行。验证HTTP200错误正文保留真实HTTP状态、固定安全错误、Key不反射、429退避、保存和检测并发／迟到响应隔离、路由应用失败不保留旧成功结果，以及真实本机HTTP接口会话／CSRF／来源与忙碌保护。修复两项既有测试的时间依赖：复盘fixture显式固定completedAt，浏览器恢复等待覆盖5秒引擎与2.5秒页面轮询；未放宽交易规则。
+
+七组浏览器流程通过：test:ui、test:wallet-ui、test:review-ui、test:radar-ui、test:opportunities-ui、test:automatic-scanner-ui、test:network-ui。新增流程覆盖手动HTTP端口校验、自动状态不假报连接、未保存草稿、三路HTTP／DNS等诊断与时间、安全复制、切页迟到响应、390px布局和无交易／钱包副作用。
+
+本开发环境允许GitHub等开发域名，但限制api.coingecko.com及api.dexscreener.com；此处不能完成真实公开行情源联通验收。已在允许的GitHub域名上验证默认Node fetch与启用环境代理的差别；这能验证代理支持缺口，不能单凭用户TIMEOUT确定其网络根因。未使用用户私钥、真实API账户或资金，未声称找到真实可成交机会。

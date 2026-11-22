@@ -13,6 +13,8 @@ import { OpportunityService } from './opportunities/service.mjs';
 import { InventoryCoordinator } from './opportunities/coordinator.mjs';
 import { bundledDirectory } from './opportunities/bundled.mjs';
 import { acquireRuntimeLock } from './runtime-lock.mjs';
+import { MarketNetwork } from './market-network.mjs';
+import { DiscoveryClient } from './opportunities/sources.mjs';
 
 const major = Number(process.versions.node.split('.')[0]);
 if (major < 24) throw new Error('请安装 Node.js 24 LTS 或更新版本');
@@ -22,9 +24,11 @@ mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 const runtimeLock = acquireRuntimeLock(dataDir);
 process.once('exit', () => runtimeLock.release());
 const store = new Store(dataDir);
+const marketNetwork = new MarketNetwork({ store });
+await marketNetwork.prepare().catch(() => {});
 const browserWallets = new BrowserWalletBridge({ store });
 const vault = new Vault(dataDir, { browserWallets });
-const engine = new Engine({ store, vault, browserWallets });
+const engine = new Engine({ store, vault, browserWallets, marketFetchImpl: marketNetwork.fetch });
 browserWallets.onUncertain = ({ tradeId, hash, requestId, reason }) => {
   engine.running = false; engine.pausedReason = reason;
   const trade = tradeId ? store.getTrade(tradeId) : null;
@@ -33,7 +37,7 @@ browserWallets.onUncertain = ({ tradeId, hash, requestId, reason }) => {
 await engine.init();
 const reviewService = new ReviewService({ store, getConfig: () => engine.config }).start();
 const radarService = new RadarService({ store, vault }).start();
-const opportunityService = new OpportunityService({ store, vault, bundledCandidates: bundledDirectory(), getConfig: () => engine.config }).start({ autoStart: process.env.DUALARB_AUTO_SCAN !== '0' });
+const opportunityService = new OpportunityService({ store, vault, network: marketNetwork, client: new DiscoveryClient({ fetchImpl: marketNetwork.fetch }), bundledCandidates: bundledDirectory(), getConfig: () => engine.config }).start({ autoStart: process.env.DUALARB_AUTO_SCAN !== '0' });
 const inventoryCoordinator = new InventoryCoordinator({ engine, scanner: opportunityService });
 const { server, url } = await startLocalServer({ engine, store, vault, browserWallets, reviewService, radarService, opportunityService, inventoryCoordinator });
 console.log(`\n双链套利工作台已启动\n本机地址：${url}\n数据目录：${dataDir}\n模式：${engine.config.mode === 'demo' ? '演示（不会广播链上交易）' : '实盘（本机保险库需解锁；插件钱包需连接）'}\n按 Ctrl+C 退出。\n`);
@@ -47,6 +51,7 @@ async function shutdown() {
   if (closing) return; closing = true; engine.stop(); browserWallets.close(); reviewService.stop(); radarService.stop(); opportunityService.stop();
   console.log('停止接收新请求。正在关闭本机服务；在途交易下次启动必须人工核对。');
   server.close(); server.closeIdleConnections?.();
+  void marketNetwork.close().catch(() => {});
   // A forced shutdown never retries a persisted intent when the process restarts.
   setTimeout(() => { try { vault.lock(); store.close(); } finally { process.exit(0); } }, 1000).unref();
 }

@@ -71,6 +71,8 @@ export function createApp({engine,store,vault,browserWallets,reviewService,radar
   }));
   app.post('/api/opportunities/discover',asyncRoute(async(req,res)=>{registryChange();res.json(await opportunities().discover());}));
   app.post('/api/opportunities/scan',asyncRoute(async(req,res)=>res.json(await opportunities().scan({refreshDirectory:true}))));
+  app.post('/api/opportunities/network',asyncRoute(async(req,res)=>{registryChange();res.json(await opportunities().saveNetworkSettings(req.body));}));
+  app.post('/api/opportunities/network/test',asyncRoute(async(req,res)=>res.json(await opportunities().testNetwork())));
   app.post('/api/opportunities/enabled',asyncRoute(async(req,res)=>{if(req.body?.enabled)registryChange();res.json(await opportunities().setEnabled(req.body?.enabled));}));
   app.post('/api/opportunities/settings',asyncRoute(async(req,res)=>{registryChange();res.json(await opportunities().saveSettings(req.body?.settings));}));
   app.post('/api/opportunities/assets',asyncRoute(async(req,res)=>{registryChange();res.json(await opportunities().saveAsset(req.body?.asset));}));

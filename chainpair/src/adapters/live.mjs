@@ -123,8 +123,9 @@ export function validateSolanaSimulationTokens({ quote, beforeAccounts, afterAcc
 }
 
 export class LiveAdapter {
-  constructor({ getConfig, vault, browserWallets, onRpcStatus = () => {}, fetchImpl = globalThis.fetch, confirmationTimeoutMs = 180000, bridgeTimeoutMs = 1800000, browserTransactionTimeoutMs = 15000 }) {
+  constructor({ getConfig, vault, browserWallets, onRpcStatus = () => {}, fetchImpl = globalThis.fetch, marketFetchImpl = fetchImpl, confirmationTimeoutMs = 180000, bridgeTimeoutMs = 1800000, browserTransactionTimeoutMs = 15000 }) {
     this.getConfig = getConfig; this.vault = vault; this.fetch = fetchImpl;
+    this.marketFetch = marketFetchImpl;
     this.browserWallets = browserWallets; this.browserTransactionTimeoutMs = browserTransactionTimeoutMs;
     this.confirmationTimeoutMs = confirmationTimeoutMs; this.bridgeTimeoutMs = bridgeTimeoutMs;
     this.quotes = new Map(); this.used = new Set(); this.rpc = {};
@@ -152,7 +153,7 @@ export class LiveAdapter {
     const config = this.config(chain);
     if (!config.poolAddress || !config.tokenAddress) throw new AdapterError(`${chain} 请配置代币和交易池地址`);
     const [response, height] = await Promise.all([
-      this.fetch(`https://api.dexscreener.com/latest/dex/pairs/${chain === 'bnb' ? 'bsc' : 'solana'}/${encodeURIComponent(config.poolAddress)}`, { signal: AbortSignal.timeout(12000), redirect: 'error' }),
+      this.marketFetch(`https://api.dexscreener.com/latest/dex/pairs/${chain === 'bnb' ? 'bsc' : 'solana'}/${encodeURIComponent(config.poolAddress)}`, { signal: AbortSignal.timeout(12000), redirect: 'error' }),
       this.rpc[chain].call(chain === 'bnb' ? 'eth_blockNumber' : 'getSlot', chain === 'bnb' ? [] : [{ commitment: 'confirmed' }])
     ]);
     if (!response.ok) throw new AdapterError(`行情 HTTP ${response.status}`);

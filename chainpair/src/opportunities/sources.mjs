@@ -118,6 +118,7 @@ async function readBody(response, maxBytes) {
 }
 
 function networkReason(error) {
+  if (['DNS','TIMEOUT','CONNECTION','TLS','PROXY','NETWORK'].includes(error?.networkReason)) return error.networkReason;
   const code = error?.cause?.code || error?.code;
   if (['ENOTFOUND', 'EAI_AGAIN'].includes(code)) return 'DNS';
   if (['ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT'].includes(code)) return 'TIMEOUT';
@@ -130,12 +131,14 @@ function networkReason(error) {
 export class DiscoveryClient {
   constructor({ fetchImpl = globalThis.fetch, now = Date.now } = {}) { this.fetchImpl = fetchImpl; this.now = now; }
 
-  async #get(url, { signal, maxBytes, apiKey, rawText = false }) {
+  async #get(url, { signal, maxBytes, maxRows, apiKey, rawText = false }) {
     const timeout = AbortSignal.timeout(DEADLINE_MS), combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    let httpStatus = null;
     try {
       const headers = { Accept: rawText ? 'text/plain' : 'application/json' };
       if (apiKey !== undefined && url === DIRECTORY_URL) headers['x-cg-demo-api-key'] = apiKey;
       const response = await this.fetchImpl(url, { method: 'GET', headers, redirect: 'error', signal: combined });
+      httpStatus = response.status;
       if (!response.ok) response.body?.cancel?.().catch(() => {});
       if (response.status === 429) throw safeError('公开行情接口限流，请等待冷却', 'DISCOVERY_RATE_LIMIT', { retryAfterMs: retryAfter(response.headers, this.now()), httpStatus: 429 });
       if (response.status === 401 || response.status === 403) throw safeError('公开行情接口要求账户或凭证，请核对服务权限', 'DISCOVERY_AUTH', { httpStatus: response.status });
@@ -145,9 +148,10 @@ export class DiscoveryClient {
       if (rawText) return content;
       let body; try { body = JSON.parse(content); } catch { throw safeError('公开行情响应无法解析', 'DISCOVERY_FORMAT'); }
       if (body && typeof body === 'object' && !Array.isArray(body) && (Object.hasOwn(body, 'error') || Object.hasOwn(body, 'status'))) throw safeError('公开行情接口返回非成功结果，请核对服务状态及权限', 'DISCOVERY_REJECTED');
+      if (!Array.isArray(body) || body.length > maxRows) throw safeError('公开行情响应数组格式无效', 'DISCOVERY_FORMAT');
       return body;
     } catch (error) {
-      if (knownErrors.has(error)) throw error;
+      if (knownErrors.has(error)) { if (httpStatus !== null && error.httpStatus === undefined) error.httpStatus = httpStatus; throw error; }
       if (timeout.aborted) throw safeError('公开行情请求超时', 'DISCOVERY_TIMEOUT', { networkReason: 'TIMEOUT' });
       if (signal?.aborted) throw safeError('公开行情请求已取消', 'DISCOVERY_ABORTED');
       throw safeError('公开行情网络请求失败，请检查连接', 'DISCOVERY_NETWORK', { networkReason: networkReason(error) });
@@ -155,7 +159,7 @@ export class DiscoveryClient {
   }
   async discover({ signal, apiKey } = {}) {
     if (apiKey !== undefined && (typeof apiKey !== 'string' || !apiKey || apiKey.length > 1000 || !/^[\x21-\x7e]+$/.test(apiKey))) throw safeError('CoinGecko Demo Key 格式无效', 'DISCOVERY_CREDENTIALS');
-    const body = await this.#get(DIRECTORY_URL, { signal, maxBytes: 8 * 1024 * 1024, apiKey });
+    const body = await this.#get(DIRECTORY_URL, { signal, maxBytes: 8 * 1024 * 1024, maxRows: 100000, apiKey });
     const candidates = normalizeDiscovery(body, { observedAt: this.now() });
     // A malformed provider response must not reflect the credential into a
     // public token field, registry entry or externally displayed source link.
@@ -172,7 +176,7 @@ export class DiscoveryClient {
     if (validated.some(value => !value)) throw safeError('行情查询代币地址无效', 'DISCOVERY_FORMAT');
     const unique = [...new Map(validated.map(address => [addressKey(chain, address), address])).values()];
     const url = `${POOLS_ORIGIN}/tokens/v1/${remoteChain}/${unique.join(',')}`;
-    const body = await this.#get(url, { signal, maxBytes: 2 * 1024 * 1024 });
+    const body = await this.#get(url, { signal, maxBytes: 2 * 1024 * 1024, maxRows: 10000 });
     return normalizePools(body, { chain, addresses: unique, observedAt: this.now() });
   }
 }

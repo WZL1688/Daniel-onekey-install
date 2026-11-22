@@ -32,7 +32,9 @@ try {
   await page.locator('#ack-note').fill('已核对测试记录没有实际广播，仅验证中断恢复与人工核对。');
   await page.locator('#ack-form button[type=submit]').click();
   await expect(page.locator('#detail-dialog')).not.toBeVisible();
-  await expect(page.locator('#execute-arbitrage')).toBeEnabled();
+  // Recovery clears the review flag immediately; the executable quote arrives
+  // on the normal 5s engine refresh and subsequent 2.5s browser status poll.
+  await expect(page.locator('#execute-arbitrage')).toBeEnabled({ timeout: 10000 });
   console.log('PASS recovery review UI unlocks using persisted trade id');
   const session = await (await page.request.get(`${url}/api/session`)).json();
   const post = async (endpoint, body) => {

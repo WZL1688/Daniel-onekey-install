@@ -68,8 +68,12 @@ class RequestBudget {
 }
 
 export class OpportunityService {
-  constructor({ store, getConfig = () => store.config, client = new DiscoveryClient(), vault = null, bundledCandidates = [], now = Date.now, sleep = wait } = {}) {
+  constructor({ store, getConfig = () => store.config, client = new DiscoveryClient(), network = null, vault = null, bundledCandidates = [], now = Date.now, sleep = wait } = {}) {
     this.store = store; this.getConfig = getConfig; this.client = client; this.vault = vault; this.bundledCandidates = bundledCandidates; this.now = now; this.sleep = sleep;
+    this.network = network; this.networkTesting = false; this.networkChanging = false;
+    this.networkDiagnostics = []; this.lastNetworkTestAt = null;
+    const networkCooldown = store.getMeta('opportunities.network-test.v1')?.nextAt;
+    this.nextNetworkTestAt = safeTime(networkCooldown) ? networkCooldown : null;
     this.settings = validateSettings(store.getMeta('opportunities.settings.v1') || {});
     this.budget = new RequestBudget(store, now); this.assets = new Map(); this.markets = {}; this.evaluations = {};
     const saved = store.getMeta('opportunities.registry.v1');
@@ -168,6 +172,94 @@ export class OpportunityService {
     const times = Object.values(this.directoryState.sources).map(source => source.nextAttemptAt).filter(at => Number.isFinite(at) && at > this.now());
     this.budget.directoryNext(preserveRate && times.length ? Math.min(...times) : this.now()); this.persistDirectory();
     this.notice = '数据源凭证已更新；请求计数和限流退避保留，交易开关未改变';
+    return this.snapshot();
+  }
+  networkSnapshot() {
+    return { ...(this.network?.snapshot?.() || { mode: 'auto', proxyUrl: '', effectiveRoute: 'direct', proxyDetected: false, routeLabel: '默认连接' }),
+      diagnostics: clone(this.networkDiagnostics), testing: this.networkTesting, lastTestAt: this.lastNetworkTestAt, nextTestAt: this.nextNetworkTestAt };
+  }
+  async saveNetworkSettings(patch) {
+    if (!this.network?.saveSettings) throw fail('网络设置服务未启用，请更新并重启程序');
+    if (this.networkChanging) throw fail('网络设置正在保存，请稍候');
+    this.networkChanging = true;
+    try {
+      this.invalidate(); await this.pendingJob;
+      this.networkDiagnostics = []; this.lastNetworkTestAt = null;
+      await this.network.saveSettings(patch);
+      const transportError = value => ['DISCOVERY_NETWORK','DISCOVERY_TIMEOUT','DISCOVERY_ABORTED'].includes(value?.errorCode);
+      if (transportError(this.poolError)) this.poolError = null;
+      for (const [source, state] of Object.entries(this.directoryState.sources)) if (transportError(state)) delete this.directoryState.sources[source];
+      const next = Object.values(this.directoryState.sources).map(state => state.nextAttemptAt).filter(at => Number.isFinite(at) && at > this.now());
+      this.budget.directoryNext(next.length ? Math.min(...next) : this.now());
+      this.persistDirectory(); this.syncErrors(); this.networkDiagnostics = []; this.lastNetworkTestAt = null; this.lastAttemptAt = 0;
+      this.notice = '数据源网络设置已保存；自动扫描将使用新连接，请求计数和限流冷却保留';
+      return this.snapshot();
+    } finally { this.networkChanging = false; }
+  }
+  async testNetwork() {
+    if (this.networkChanging) throw fail('网络设置正在保存，请稍候检测');
+    if (this.networkTesting) return this.snapshot();
+    if (this.nextNetworkTestAt > this.now()) throw fail('连接检测冷却中，请等待一分钟后重试');
+    this.networkTesting = true;
+    try {
+      this.revision++; this.cancelGeneration = (this.cancelGeneration || 0) + 1; this.controller?.abort();
+      const revision = this.revision;
+      await this.pendingJob;
+      if (revision !== this.revision || this.networkChanging) return this.snapshot();
+      await this.job(async context => {
+        this.networkDiagnostics = [];
+        const targets = [
+          { source: 'bnb-pools', run: signal => this.client.pools({ chain: 'bnb', addresses: ['0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c'], signal }) },
+          { source: 'solana-pools', run: signal => this.client.pools({ chain: 'solana', addresses: ['So11111111111111111111111111111111111111112'], signal }) },
+          { source: 'coingecko-directory', run: signal => this.client.discover({ signal, apiKey: this.vault?.getCoinGeckoCredentials?.()?.apiKey }) }
+        ];
+        for (const target of targets) {
+          if (context.signal.aborted || context.revision !== this.revision) return;
+          const sourceState = target.source === 'coingecko-directory' ? this.directoryState.sources.coingecko : null;
+          const retry = sourceState?.errorCode === 'DISCOVERY_RATE_LIMIT' && sourceState.nextAttemptAt > this.now();
+          let gate = retry ? { allowed: false, reason: 'CoinGecko 限流冷却中', nextAt: sourceState.nextAttemptAt } : this.budget.reserve(this.settings, 'pools');
+          if (!gate.allowed && gate.kind === 'gap' && gate.nextAt - this.now() <= 1000) {
+            await this.sleep(Math.max(0, gate.nextAt - this.now()));
+            if (context.signal.aborted || context.revision !== this.revision) return;
+            gate = this.budget.reserve(this.settings, 'pools');
+          }
+          const diagnostic = { source: target.source, status: 'error', httpStatus: null, errorCode: null, networkReason: null, message: '', records: null, checkedAt: this.now() };
+          if (!gate.allowed) {
+            diagnostic.status = 'rate_limited'; diagnostic.errorCode = 'DISCOVERY_RATE_LIMIT'; diagnostic.message = gate.reason;
+            this.networkDiagnostics.push(diagnostic); continue;
+          }
+          this.nextNetworkTestAt = this.now() + 60000;
+          this.store.setMeta('opportunities.network-test.v1', { nextAt: this.nextNetworkTestAt });
+          this.lastAttemptAt = this.now();
+          try {
+            const result = await target.run(context.signal);
+            if (context.signal.aborted || context.revision !== this.revision) return;
+            diagnostic.status = Array.isArray(result) && result.length ? 'ok' : 'empty'; diagnostic.httpStatus = 200;
+            diagnostic.records = Array.isArray(result) ? result.length : 0;
+            diagnostic.message = diagnostic.status === 'ok' ? '接口已响应并返回有效记录' : '接口已响应，但没有符合条件的记录';
+          } catch (error) {
+            if (context.signal.aborted || context.revision !== this.revision) return;
+            const code = ['DISCOVERY_RATE_LIMIT','DISCOVERY_AUTH','DISCOVERY_REJECTED','DISCOVERY_TIMEOUT','DISCOVERY_UNAVAILABLE','DISCOVERY_FORMAT','DISCOVERY_CREDENTIALS','DISCOVERY_ABORTED','DISCOVERY_NETWORK'].includes(error?.code) ? error.code : 'DISCOVERY_NETWORK';
+            diagnostic.errorCode = code;
+            diagnostic.httpStatus = Number.isInteger(error?.httpStatus) && error.httpStatus >= 100 && error.httpStatus <= 599 ? error.httpStatus : null;
+            diagnostic.networkReason = ['DNS','TIMEOUT','CONNECTION','TLS','PROXY','NETWORK'].includes(error?.networkReason) ? error.networkReason : code === 'DISCOVERY_TIMEOUT' ? 'TIMEOUT' : null;
+            diagnostic.status = code === 'DISCOVERY_RATE_LIMIT' ? 'rate_limited' : ['DISCOVERY_AUTH','DISCOVERY_REJECTED'].includes(code) ? 'auth_required' : 'error';
+            diagnostic.message = ({ DISCOVERY_RATE_LIMIT: '接口限流，请等待冷却', DISCOVERY_AUTH: '接口要求有效凭证或权限', DISCOVERY_REJECTED: '接口拒绝请求', DISCOVERY_TIMEOUT: '连接超时', DISCOVERY_UNAVAILABLE: '数据源暂时不可用', DISCOVERY_FORMAT: '响应格式无效' })[code] || '数据源连接失败';
+            if (code === 'DISCOVERY_RATE_LIMIT') {
+              if (target.source === 'coingecko-directory') {
+                const previous = this.directoryState.sources.coingecko || {};
+                this.directoryState.sources.coingecko = { ...previous, source: 'coingecko', status: 'retrying', errorCode: code, message: diagnostic.message,
+                  lastAttemptAt: this.now(), nextAttemptAt: Math.max(previous.nextAttemptAt || 0, this.now() + Math.min(DAY, Math.max(60000, error.retryAfterMs || 60000))) };
+                this.persistDirectory();
+              } else this.budget.backoff(error.retryAfterMs);
+            }
+          }
+          diagnostic.checkedAt = this.now(); this.networkDiagnostics.push(diagnostic);
+        }
+        this.lastNetworkTestAt = this.now();
+        this.notice = '只读连接检测完成；检测不会导入代币、核验映射或执行交易';
+      }, 'network');
+    } finally { this.networkTesting = false; }
     return this.snapshot();
   }
   invalidate() {
@@ -290,7 +382,7 @@ export class OpportunityService {
       status, reason, notice: this.notice, lastError: this.lastError || null, updatedAt: Math.max(0, ...rows.map(r => r.observedAt || 0)) || null,
       nextRequestAt: gate.nextAt, usage: gate.usage, directoryUpdatedAt: this.directoryUpdatedAt, directoryNextRequestAt: budget.directoryNextAt || null,
       directory: this.directorySnapshot(), credentials: { configured, locked: configured && !this.vault?.getCoinGeckoCredentials?.() },
-      scanProgress: clone(this.scanProgress), autoScanPreferred: this.autoScanPreferred,
+      scanProgress: clone(this.scanProgress), autoScanPreferred: this.autoScanPreferred, network: this.networkSnapshot(),
       counts: { total: rows.length, approved: rows.filter(r => r.asset.mapping.confirmed).length, candidate: rows.filter(r => ['candidate','needs_mapping'].includes(r.stage)).length }, safety: 'unverified' };
   }
   async dispatch(kind, action, { signal, revision }, source = null) {
@@ -342,11 +434,13 @@ export class OpportunityService {
   async job(task, stage = 'pools') {
     if (this.busy) return this.snapshot();
     this.busy = true; this.currentStage = stage; this.notice = ''; const controller = new AbortController(), revision = this.revision; this.controller = controller;
+    let finish; this.pendingJob = new Promise(resolve => { finish = resolve; });
     try { await task({ signal: controller.signal, revision }); }
-    finally { this.busy = false; this.currentStage = null; if (this.controller === controller) this.controller = null; this.syncErrors(); }
+    finally { this.busy = false; this.currentStage = null; if (this.controller === controller) this.controller = null; this.syncErrors(); finish(); }
     return this.snapshot();
   }
   async discover() {
+    if (this.networkTesting || this.networkChanging) return this.snapshot();
     return this.job(async context => {
       let attempted = false, primaryReady = false;
       const success = (source, result) => {
@@ -385,7 +479,7 @@ export class OpportunityService {
     }, 'directory');
   }
   async scan({ refreshDirectory = false } = {}) {
-    if (this.busy) return this.snapshot();
+    if (this.busy || this.networkTesting || this.networkChanging) return this.snapshot();
     const cancellation = this.cancelGeneration || 0;
     if (refreshDirectory) {
       this.seedBundled({ augment: true });
@@ -439,7 +533,7 @@ export class OpportunityService {
     return this.snapshot();
   }
   async tick() {
-    if (!this.enabled || this.busy || this.now() - this.lastAttemptAt < this.settings.pollIntervalMs) return;
+    if (!this.enabled || this.busy || this.networkTesting || this.networkChanging || this.now() - this.lastAttemptAt < this.settings.pollIntervalMs) return;
     if (!this.budget.check(this.settings).allowed) return;
     const hasDirectoryAssets = !this.assets.size || [...this.assets.values()].some(asset => asset.source !== 'manual');
     if (hasDirectoryAssets && this.budget.check(this.settings, 'directory').allowed) await this.discover();

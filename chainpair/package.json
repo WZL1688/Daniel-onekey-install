@@ -1,6 +1,6 @@
 {
   "name": "dualchain-local-arbitrage",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "private": true,
   "type": "module",
   "description": "Local BNB Chain and Solana sequential arbitrage workstation",
@@ -11,13 +11,14 @@
     "start": "node src/main.mjs --open",
     "start:server": "node src/main.mjs",
     "test": "node --test test/*.test.mjs",
-    "check": "node --check src/main.mjs && node --check src/browser-wallets.mjs && node --check src/policy.mjs && node --check src/review.mjs && node --check public/app.js && node --check public/wallet-connect.js && node --check src/radar/ave.mjs && node --check src/radar/budget.mjs && node --check src/radar/settings.mjs && node --check src/radar/service.mjs && node --check public/radar.js && node --check public/radar-voice.js && node --check src/runtime-lock.mjs && node --check src/opportunities/sources.mjs && node --check src/opportunities/registry.mjs && node --check src/opportunities/service.mjs && node --check src/opportunities/coordinator.mjs && node --check public/opportunities.js && node --check src/opportunities/wormhole.mjs && node --check src/opportunities/bundled.mjs",
+    "check": "node --check src/main.mjs && node --check src/browser-wallets.mjs && node --check src/policy.mjs && node --check src/review.mjs && node --check public/app.js && node --check public/wallet-connect.js && node --check src/radar/ave.mjs && node --check src/radar/budget.mjs && node --check src/radar/settings.mjs && node --check src/radar/service.mjs && node --check public/radar.js && node --check public/radar-voice.js && node --check src/runtime-lock.mjs && node --check src/opportunities/sources.mjs && node --check src/opportunities/registry.mjs && node --check src/opportunities/service.mjs && node --check src/opportunities/coordinator.mjs && node --check public/opportunities.js && node --check src/opportunities/wormhole.mjs && node --check src/opportunities/bundled.mjs && node --check src/market-network.mjs",
     "test:ui": "node test/browser-smoke.mjs",
     "test:wallet-ui": "node test/wallet-ui-smoke.mjs",
     "test:review-ui": "node test/review-ui-smoke.mjs",
     "test:radar-ui": "node test/radar-ui-smoke.mjs",
     "test:opportunities-ui": "node test/opportunities-ui-smoke.mjs",
-    "test:automatic-scanner-ui": "node test/automatic-scanner-ui-smoke.mjs"
+    "test:automatic-scanner-ui": "node test/automatic-scanner-ui-smoke.mjs",
+    "test:network-ui": "node test/network-ui-smoke.mjs"
   },
   "dependencies": {
     "@solana/web3.js": "^1.98.4",
@@ -25,6 +26,7 @@
     "decimal.js": "^10.6.0",
     "ethers": "^6.15.0",
     "express": "^5.1.0",
+    "undici": "8.13.1",
     "zod": "^4.1.0"
   },
   "devDependencies": {

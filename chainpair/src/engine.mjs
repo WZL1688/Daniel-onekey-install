@@ -13,9 +13,10 @@ const safeError = message => Object.assign(new Error(message), { safe: true });
 const errText = e => e?.safe ? String(e.message).replace(/https?:\/\/[^\s]+/g, '[远程服务]').slice(0, 500) : '操作失败，请检查配置及链上回执；程序已保留状态';
 const quoteFresh = q => q && Number.isFinite(Date.parse(q.expiresAt)) && Date.parse(q.expiresAt) > Date.now();
 export class Engine {
-  constructor({ store, vault, browserWallets, adapterFactory, phaseDelayMs = 0 }) {
+  constructor({ store, vault, browserWallets, adapterFactory, marketFetchImpl, phaseDelayMs = 0 }) {
     this.store = store; this.vault = vault; this.config = store.config;
     this.adapterFactory = adapterFactory; this.phaseDelayMs = phaseDelayMs; this.browserWallets = browserWallets;
+    this.marketFetchImpl = marketFetchImpl;
     this.market = {}; this.balances = {}; this.opportunity = null; this.plan = null;
     this.running = false; this.busy = false; this.refreshing = false; this.activeTradeId = null;
     this.configuring = false; this.configRevision = 0; this.quoteBuilders = 0;
@@ -35,7 +36,7 @@ export class Engine {
     this.schedule(); return this;
   }
   async makeAdapter() {
-    const args = { getConfig: () => this.config, store: this.store, vault: this.vault, browserWallets: this.browserWallets };
+    const args = { getConfig: () => this.config, store: this.store, vault: this.vault, browserWallets: this.browserWallets, marketFetchImpl: this.marketFetchImpl };
     if (this.adapterFactory) this.adapter = await this.adapterFactory(args);
     else if (this.config.mode === 'demo') this.adapter = new DemoAdapter(args);
     else { const { LiveAdapter } = await import('./adapters/live.mjs'); this.adapter = new LiveAdapter(args); }

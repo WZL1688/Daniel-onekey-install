@@ -74,7 +74,7 @@ export class InventoryCoordinator {
   launch(asset, kind) {
     const parent = this.engine, revision = parent.configRevision, baseline = policyFingerprint(createPolicySnapshot(parent.config));
     const config = this.context(asset);
-    const worker = new Engine({ store: parent.store, vault: parent.vault, browserWallets: parent.browserWallets, adapterFactory: parent.adapterFactory, phaseDelayMs: parent.phaseDelayMs });
+    const worker = new Engine({ store: parent.store, vault: parent.vault, browserWallets: parent.browserWallets, adapterFactory: parent.adapterFactory, marketFetchImpl: parent.marketFetchImpl, phaseDelayMs: parent.phaseDelayMs });
     worker.config = config; worker.running = false;
     parent.busy = true; this.lastError = '';
     this.job = { id: randomUUID(), assetId: asset.id, assetRevision: asset.revision, kind, mode: parent.config.mode, status: 'preparing', startedAt: new Date(this.now()).toISOString(), tradeId: null };

@@ -39,7 +39,7 @@ test('runtime lock rejects duplicate engines, releases normally and recovers a d
 
 test('inventory cash spread remains separate from closed profit in stats and daily review', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'inventory-review-')), store = new Store(dir), now = Date.parse('2026-11-20T06:00:00Z');
-  const base = { type: 'arbitrage', mode: 'demo', status: 'COMPLETED', createdAt: '2026-11-20T01:00:00Z', updatedAt: '2026-11-20T01:01:00Z', estimate: { netProfitUsd: .2 }, actual: { spentUsd: 5, receivedUsd: 5.3, gasUsd: .02, rentUsd: .01, profitUsd: .27 } };
+  const base = { type: 'arbitrage', mode: 'demo', status: 'COMPLETED', createdAt: '2026-11-20T01:00:00Z', completedAt: '2026-11-20T01:01:00Z', updatedAt: '2026-11-20T01:01:00Z', estimate: { netProfitUsd: .2 }, actual: { spentUsd: 5, receivedUsd: 5.3, gasUsd: .02, rentUsd: .01, profitUsd: .27 } };
   try {
     store.saveTrade({ ...base, id: 'closed' }); store.saveTrade({ ...base, id: 'stock', executionMode: 'inventory', actual: { ...base.actual, closedInventory: false, inventoryDelta: { address: 'must-not-enter-summary' } } });
     assert.equal(store.stats().profitUsd, .27); assert.equal(store.stats().inventoryCashSpreadUsd, .27);
