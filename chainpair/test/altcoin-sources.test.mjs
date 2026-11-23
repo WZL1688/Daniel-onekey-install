@@ -10,13 +10,13 @@ const json = body => new Response(JSON.stringify(body));
 
 test('the requested quote token uses the verified base/native ratio and keeps whole-pool activity', () => {
   const [row] = normalizePools([pair()], { chain: 'bnb', addresses: [b], observedAt: now });
-  assert.equal(row.tokenAddress, b); assert.equal(row.quoteAddress, a); assert.equal(row.priceUsd, 5);
+  assert.equal(row.tokenAddress, b); assert.equal(row.quoteAddress, a); assert.equal(row.priceUsd, 5); assert.equal(row.priceMethod, 'derived-from-base-native');
   assert.equal(row.volume1hUsd, 1000); assert.equal(row.trades1h, 9); assert.equal(row.sourceUpdatedAt, null);
 });
 
 test('both requested sides of the same pool remain independently priced without identity collisions', () => {
   const rows = normalizePools([pair(),pair()], { chain: 'bnb', addresses: [a,b], observedAt: now });
-  assert.equal(rows.length, 2); assert.equal(rows.find(row=>row.tokenAddress===a).priceUsd,20); assert.equal(rows.find(row=>row.tokenAddress===b).priceUsd,5);
+  assert.equal(rows.length, 2); assert.equal(rows.find(row=>row.tokenAddress===a).priceUsd,20); assert.equal(rows.find(row=>row.tokenAddress===a).priceMethod,'provider-base-usd'); assert.equal(rows.find(row=>row.tokenAddress===b).priceUsd,5);
   assert.deepEqual(normalizePools([pair(),pair({ priceUsd:'21' })],{ chain:'bnb',addresses:[a,b],observedAt:now }),[]);
 });
 

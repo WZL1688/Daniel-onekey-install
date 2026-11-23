@@ -51,7 +51,7 @@ export class Engine {
     const wallets = this.vault.publicStatus();
     const reviewTradeId = this.store.allTrades().find(trade => trade.status === 'NEEDS_REVIEW')?.id || null;
     return { config: this.config, policyFingerprint: policyFingerprint(createPolicySnapshot(this.config)), market: this.market, balances: this.balances, opportunity: this.opportunity,
-      engine: { running: this.running, busy: this.busy, configuring: this.configuring, pausedReason: this.pausedReason, activeTradeId: this.activeTradeId, reviewTradeId, lastError: this.lastError, mode: this.config.mode, executionMode: this.config.executionMode || 'bridge' },
+      engine: { running: this.running, busy: this.busy, configuring: this.configuring, configRevision: this.configRevision, pausedReason: this.pausedReason, activeTradeId: this.activeTradeId, reviewTradeId, lastError: this.lastError, mode: this.config.mode, executionMode: this.config.executionMode || 'bridge' },
       wallets, stats: this.store.stats(), okxConfigured: Boolean(wallets.okxConfigured),
       rebalance: { lastAt: this.store.getMeta('lastRebalanceAt') || null, triggerUsd: 5, targetShare: .6 }, serverTime: now() };
   }

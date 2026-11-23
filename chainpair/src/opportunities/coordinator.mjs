@@ -10,6 +10,7 @@ const clone = value => structuredClone(value);
 export class InventoryCoordinator {
   constructor({ engine, scanner, now = Date.now }) {
     this.engine = engine; this.scanner = scanner; this.now = now;
+    scanner.getExecutionRevision = () => engine.configRevision;
     this.worker = null; this.job = null; this.pending = null; this.authorizations = new Map();
     this.lastEvaluation = null; this.lastError = ''; this.lastAutomaticAt = 0; this.attempts = new Map();
     engine.inventoryCoordinator = this;
@@ -43,15 +44,24 @@ export class InventoryCoordinator {
     }
     return validateConfig(config);
   }
+  assertComparisonUsable(id) {
+    if (typeof this.scanner.assertComparisonUsable !== 'function') return;
+    try { this.scanner.assertComparisonUsable(id); }
+    catch (error) { this.authorizations.delete(id); throw error; }
+  }
   authorization(id) {
-    const intent = this.authorizations.get(id), asset = this.scanner.getApprovedAsset(id);
-    if (!intent || intent.expiresAt <= this.now() || intent.parentRevision !== this.engine.configRevision || intent.assetRevision !== asset.revision || intent.policyFingerprint !== policyFingerprint(createPolicySnapshot(this.engine.config))) throw fail('复核报价已过期或参数已变更，请重新复核当前币对');
-    return intent;
+    try {
+      this.assertComparisonUsable(id);
+      const intent = this.authorizations.get(id), asset = this.scanner.getApprovedAsset(id);
+      if (!intent || intent.expiresAt <= this.now() || intent.parentRevision !== this.engine.configRevision || intent.assetRevision !== asset.revision || intent.policyFingerprint !== policyFingerprint(createPolicySnapshot(this.engine.config))) throw fail('复核报价已过期或参数已变更，请重新复核当前币对');
+      return intent;
+    } catch (error) { this.authorizations.delete(id); throw error; }
   }
   async quote(id) {
     this.available();
-    const asset = this.scanner.getApprovedAsset(id);
     this.authorizations.delete(id);
+    this.assertComparisonUsable(id);
+    const asset = this.scanner.getApprovedAsset(id);
     return this.launch(asset, 'quote');
   }
   execute(id) {
@@ -80,6 +90,7 @@ export class InventoryCoordinator {
     this.job = { id: randomUUID(), assetId: asset.id, assetRevision: asset.revision, kind, mode: parent.config.mode, status: 'preparing', startedAt: new Date(this.now()).toISOString(), tradeId: null };
     const identity = JSON.stringify(asset);
     worker.executionGuard = () => {
+      this.assertComparisonUsable(asset.id);
       if (parent.configRevision !== revision || policyFingerprint(createPolicySnapshot(parent.config)) !== baseline || parent.pausedReason || parent.store.allTrades().some(trade => trade.status === 'NEEDS_REVIEW') || JSON.stringify(this.scanner.getApprovedAsset(asset.id)) !== identity) throw fail('资产核验、钱包或风控参数已变化，停止后续步骤并核对');
     };
     this.worker = worker;
@@ -89,8 +100,10 @@ export class InventoryCoordinator {
         await worker.loadMarketBalances(); await worker.buildOpportunity(); worker.executionGuard();
         const opportunity = clone(worker.opportunity || { executable: false, reasons: ['未取得完整双腿报价'] });
         opportunity.mode = parent.config.mode; opportunity.assetRevision = asset.revision;
+        opportunity.parentPolicyFingerprint = baseline;
+        opportunity.parentRevision = revision;
         this.lastEvaluation = { assetId: asset.id, ...opportunity };
-        this.scanner.recordEvaluation(asset.id, opportunity);
+        this.scanner.recordEvaluation(asset.id, kind === 'quote' ? opportunity : { ...opportunity, executable: false, reasons: [...(opportunity.reasons || []), '该报价已用于本次执行；下一笔交易须重新复核'] });
         if (!opportunity.executable) { this.job.status = 'blocked'; return opportunity; }
         if (kind === 'quote') {
           this.authorizations.set(asset.id, { parentRevision: revision, assetRevision: asset.revision, policyFingerprint: baseline, expiresAt: Date.parse(opportunity.expiresAt) });

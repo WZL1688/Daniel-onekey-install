@@ -2,6 +2,8 @@ import { DiscoveryClient } from './sources.mjs';
 import { normalizeAsset, validAddress, validId, decimals, registryConflictIds, sameAddress, publicText, opportunityError as fail } from './registry.mjs';
 import { classifyAsset, qualifyMarkets } from './universe.mjs';
 import { mergeContractCatalogs, normalizeContractCatalog } from './catalogs.mjs';
+import { selectReferencePool } from './pool-selection.mjs';
+import { createPolicySnapshot, policyFingerprint } from '../policy.mjs';
 
 const DAY = 86400000, DIRECTORY_GAP = 6 * 3600000, FRESH_MS = 120000;
 const clone = value => structuredClone(value);
@@ -10,12 +12,12 @@ const number = value => typeof value === 'number' && Number.isFinite(value) && v
 const freeze = value => { if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); } return value; };
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 export const DEFAULT_OPPORTUNITY_SETTINGS = Object.freeze({ pollIntervalMs: 60000, minLiquidityUsd: 20000, minSpreadBps: 50, maxAssetsPerScan: 30, maxRequestsPerDay: 5000,
-  includeStablecoins: false, includeMajors: false, minVolume24hUsd: 10000, minVolume1hUsd: 100, minTrades1h: 3, maxSideSkewMs: 30000, maxSpreadBps: 3000 });
+  includeStablecoins: false, includeMajors: false, minVolume24hUsd: 10000, minVolume1hUsd: 100, minTrades1h: 3, maxSideSkewMs: 30000, maxSpreadBps: 3000, maxPoolDeviationBps: 1500 });
 
 function validateSettings(patch, previous = DEFAULT_OPPORTUNITY_SETTINGS) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw fail('机会扫描设置格式无效');
   const rules = { pollIntervalMs: [30000, 3600000, true], minLiquidityUsd: [0, 1e12], minSpreadBps: [0, 1000000], maxAssetsPerScan: [1, 100, true], maxRequestsPerDay: [1, 20000, true],
-    minVolume24hUsd: [0, 1e15], minVolume1hUsd: [0, 1e15], minTrades1h: [0, 1e9, true], maxSideSkewMs: [1000, 120000, true], maxSpreadBps: [1, 1000000] };
+    minVolume24hUsd: [0, 1e15], minVolume1hUsd: [0, 1e15], minTrades1h: [0, 1e9, true], maxSideSkewMs: [1000, 120000, true], maxSpreadBps: [1, 1000000], maxPoolDeviationBps: [0, 10000] };
   const out = { ...previous };
   for (const [key, value] of Object.entries(patch)) {
     if (['includeStablecoins','includeMajors'].includes(key)) { if (typeof value !== 'boolean') throw fail('扫描范围开关须为布尔值'); out[key] = value; continue; }
@@ -101,6 +103,16 @@ export class OpportunityService {
         this.assets.set(asset.id, asset);
       } catch { throw new Error('同币清单损坏，请保留本机数据核对'); }
     }
+    const quarantines = store.getMeta('opportunities.comparison-quarantine.v1') || {};
+    if (!quarantines || typeof quarantines !== 'object' || Array.isArray(quarantines) || Object.keys(quarantines).length > 400) throw new Error('价格隔离记录损坏，请保留本机数据核对');
+    this.comparisonQuarantines = {};
+    for (const [id, record] of Object.entries(quarantines)) {
+      const asset = this.assets.get(id);
+      if (!asset) continue;
+      if (typeof record?.identity !== 'string' || !safeTime(record.observedAt)) throw new Error('价格隔离记录损坏，请保留本机数据核对');
+      if (record.requiresConsensus !== undefined && (!Array.isArray(record.requiresConsensus) || record.requiresConsensus.length > 2 || record.requiresConsensus.some(chain => !['bnb','solana'].includes(chain)))) throw new Error('多池隔离记录损坏，请保留本机数据核对');
+      if (record.identity === this.comparisonIdentity(asset)) this.comparisonQuarantines[id] = { ...record, requiresConsensus: [...new Set([...(record.requiresConsensus || []), ...['bnb','solana'].filter(chain => record.market?.[chain]?.priceConflict)])] };
+    }
     const cached = store.getMeta('opportunities.market.v1');
     if (cached && typeof cached === 'object' && !Array.isArray(cached)) for (const [id, market] of Object.entries(cached).slice(0, 400)) if (this.assets.has(id)) {
       const cleaned = {};
@@ -127,6 +139,31 @@ export class OpportunityService {
   }
   persistRegistry() { this.store.setMeta('opportunities.registry.v1', [...this.assets.values()]); }
   persistDirectory() { this.store.setMeta('opportunities.directory-state.v2', this.directoryState); }
+  comparisonIdentity(asset) { return JSON.stringify([asset.chains.bnb.address.toLowerCase(), asset.chains.solana.address]); }
+  rememberComparisonQuarantine(asset) {
+    const identity = this.comparisonIdentity(asset);
+    const current = this.markets[asset.id] || {}, market = {};
+    for (const chain of ['bnb','solana']) {
+      const pool = this.cleanPool(current[chain], chain, [asset.chains[chain].address]);
+      if (pool) market[chain] = pool;
+    }
+    const previous = this.comparisonQuarantines[asset.id];
+    const requiresConsensus = [...new Set([...(previous?.identity === identity && Array.isArray(previous.requiresConsensus) ? previous.requiresConsensus.filter(chain => ['bnb','solana'].includes(chain)) : []), ...['bnb','solana'].filter(chain => market[chain]?.priceConflict)])];
+    if (previous?.identity === identity) {
+      if (JSON.stringify(previous.requiresConsensus || []) === JSON.stringify(requiresConsensus)) return;
+      this.comparisonQuarantines[asset.id] = { ...previous, requiresConsensus };
+    } else this.comparisonQuarantines[asset.id] = { identity, observedAt: this.now(), market, requiresConsensus };
+    this.store.setMeta('opportunities.comparison-quarantine.v1', this.comparisonQuarantines);
+  }
+  updateComparisonQuarantine(asset) {
+    const row = this.row(asset, { ignoreQuarantine: true });
+    if (row.anomalous) this.rememberComparisonQuarantine(asset);
+    else if (row.comparisonStatus === 'comparable' && this.comparisonQuarantines[asset.id] &&
+      (this.comparisonQuarantines[asset.id].requiresConsensus || []).every(chain => this.markets[asset.id]?.[chain]?.priceConfidence === 'pool-consensus')) {
+      delete this.comparisonQuarantines[asset.id];
+      this.store.setMeta('opportunities.comparison-quarantine.v1', this.comparisonQuarantines);
+    }
+  }
   refreshDirectoryGate({ fallback = true } = {}) {
     const required = ['coingecko', ...(typeof this.client.contracts === 'function' ? ['coinpaprika-bnb','coinpaprika-solana'] : []), ...(fallback && typeof this.client.discoverWrapped === 'function' ? ['wormhole'] : [])];
     const paprikaRetry = Math.max(0, ...Object.entries(this.directoryState.sources).filter(([source,state]) => source.startsWith('coinpaprika-') && state?.errorCode === 'DISCOVERY_RATE_LIMIT').map(([,state]) => state.nextAttemptAt || 0));
@@ -304,7 +341,7 @@ export class OpportunityService {
     if (!previous && [...this.assets.values()].filter(a => a.source === 'manual').length >= 100) throw fail('最多保存100个手工同币条目');
     this.assets.set(next.id, next); delete this.markets[next.id]; this.invalidate(); this.persistRegistry(); return this.snapshot();
   }
-  removeAsset(id) { validId(id); if (!this.assets.delete(id)) throw fail('同币条目不存在'); delete this.markets[id]; this.invalidate(); this.persistRegistry(); this.store.setMeta('opportunities.market.v1', this.markets); return this.snapshot(); }
+  removeAsset(id) { validId(id); if (!this.assets.delete(id)) throw fail('同币条目不存在'); delete this.markets[id]; delete this.comparisonQuarantines[id]; this.store.setMeta('opportunities.comparison-quarantine.v1', this.comparisonQuarantines); this.invalidate(); this.persistRegistry(); this.store.setMeta('opportunities.market.v1', this.markets); return this.snapshot(); }
   approveAsset({ id, revision, confirmed, evidence, chains } = {}) {
     const asset = this.assets.get(validId(id)); if (!asset) throw fail('同币条目不存在');
     if (confirmed === false) { asset.mapping.confirmed = false; asset.mapping.evidence = ''; asset.revision++; asset.updatedAt = this.now(); this.invalidate(); this.persistRegistry(); return this.snapshot(); }
@@ -328,15 +365,25 @@ export class OpportunityService {
     for (const chain of ['bnb', 'solana']) { decimals(chain, asset.chains[chain].decimals); validAddress(chain, asset.chains[chain].poolAddress); }
     return freeze(clone({ id: asset.id, name: asset.name, symbol: asset.symbol, revision: asset.revision, chains: asset.chains, mappingEvidence: asset.mapping.evidence }));
   }
+  assertComparisonUsable(id) {
+    const asset = this.assets.get(validId(id));
+    if (!asset) throw fail('同币条目不存在');
+    const row = this.row(asset);
+    if (row.comparisonStatus === 'quarantined') { this.rememberComparisonQuarantine(asset); throw fail('该项目参考价格异常，已隔离并停止交易；请核对交易池、价格单位及同币数量关系，重新扫描取得有效价格后再复核'); }
+    return row;
+  }
   cleanPool(input, chain, requested) {
     if (!input || input.chain !== chain) return null;
     try {
       const tokenAddress = validAddress(chain, input.tokenAddress), poolAddress = validAddress(chain, input.poolAddress), quoteAddress = validAddress(chain, input.quoteAddress);
       if (!requested.some(a => sameAddress(chain, a, tokenAddress)) || !number(input.priceUsd) || !safeTime(input.observedAt) || input.observedAt > this.now() + 1000) return null;
-      return { chain, tokenAddress, poolAddress, quoteAddress, priceUsd: number(input.priceUsd), liquidityUsd: number(input.liquidityUsd), volume24hUsd: number(input.volume24hUsd), volume1hUsd: number(input.volume1hUsd), trades1h: Number.isSafeInteger(input.trades1h) && input.trades1h >= 0 ? input.trades1h : null, observedAt: input.observedAt, sourceUpdatedAt: null, dexId: publicText(input.dexId, 40), safety: 'unverified' };
+      return { chain, tokenAddress, poolAddress, quoteAddress, priceUsd: number(input.priceUsd), priceMethod: ['provider-base-usd','derived-from-base-native'].includes(input.priceMethod) ? input.priceMethod : 'unknown',
+        priceConfidence: ['none','single-pool','pool-consensus','conflicting-pools'].includes(input.priceConfidence) ? input.priceConfidence : 'unknown', priceConflict: input.priceConflict === true,
+        poolDiagnostics: input.poolDiagnostics && typeof input.poolDiagnostics === 'object' ? Object.fromEntries(['eligiblePools','totalPools','agreementPools','rejectedOutliers'].map(key => [key, Number.isSafeInteger(input.poolDiagnostics[key]) && input.poolDiagnostics[key] >= 0 && input.poolDiagnostics[key] <= 3000 ? input.poolDiagnostics[key] : null])) : null,
+        liquidityUsd: number(input.liquidityUsd), volume24hUsd: number(input.volume24hUsd), volume1hUsd: number(input.volume1hUsd), trades1h: Number.isSafeInteger(input.trades1h) && input.trades1h >= 0 ? input.trades1h : null, observedAt: input.observedAt, sourceUpdatedAt: null, dexId: publicText(input.dexId, 40), safety: 'unverified' };
     } catch { return null; }
   }
-  row(asset) {
+  row(asset, { ignoreQuarantine = false } = {}) {
     const market = this.markets[asset.id] || {}, reasons = [], now = this.now();
     const bnb = market.bnb || null, solana = market.solana || null;
     const universe = classifyAsset(asset, this.settings), quality = qualifyMarkets({ bnb, solana }, this.settings, now, Boolean(market.generation));
@@ -345,6 +392,7 @@ export class OpportunityService {
     if (registryConflictIds([...this.assets.values()]).has(asset.id)) reasons.push('同币清单链地址冲突');
     for (const chain of ['bnb','solana']) if (asset.mapping.confirmed && market[chain] && !sameAddress(chain, asset.chains[chain].poolAddress, market[chain].poolAddress)) reasons.push(`${chain} 行情池与已确认池不一致`);
     if (this.lastScanFailed) reasons.push('最新扫描未完成，等待成功扫描');
+    for (const chain of ['bnb','solana']) if (market[chain]?.priceConflict) reasons.push(`${chain} 同链多个交易池价格冲突，已隔离，需核对池与单位`);
     const marketQualified = quality.qualified && reasons.length === 0;
     reasons.push(...universe.reasons, ...quality.reasons);
     let buyChain = null, sellChain = null, spreadBps = null, indicativeGrossUsd = null;
@@ -360,15 +408,30 @@ export class OpportunityService {
         if (spreadBps > this.settings.maxSpreadBps) reasons.push('价差异常过大，须核对池、单位关系和可卖出性');
       }
     } else reasons.push('尚无同轮双链行情');
-    const opportunityQualified = marketQualified && universe.eligible && spreadBps !== null && spreadBps >= this.settings.minSpreadBps && spreadBps <= this.settings.maxSpreadBps && indicativeGrossUsd !== null;
+    const observedAnomaly = spreadBps !== null && spreadBps > this.settings.maxSpreadBps || bnb?.priceConflict === true || solana?.priceConflict === true;
+    const latched = !ignoreQuarantine && this.comparisonQuarantines[asset.id]?.identity === this.comparisonIdentity(asset);
+    const anomalous = observedAnomaly || latched;
+    if (latched && !observedAnomaly) reasons.push('此前价格异常仍处于隔离，等待同轮双侧有效价格复核');
+    if (latched && this.comparisonQuarantines[asset.id].requiresConsensus?.length) reasons.push('此前存在同链多池价格冲突，须相关链新的多池一致报价后解除隔离');
+    const savedEvidence = latched ? this.comparisonQuarantines[asset.id] : null, evidenceMarkets = {};
+    if (savedEvidence?.market) for (const chain of ['bnb','solana']) {
+      const pool = this.cleanPool(savedEvidence.market[chain], chain, [asset.chains[chain].address]);
+      if (pool) evidenceMarkets[chain] = pool;
+    }
+    const quarantineEvidence = savedEvidence ? { observedAt: savedEvidence.observedAt, market: evidenceMarkets } : null;
+    const comparisonStatus = anomalous ? 'quarantined' : marketQualified && spreadBps !== null ? 'comparable' : 'unavailable';
+    if (anomalous || !marketQualified) indicativeGrossUsd = null;
+    const opportunityQualified = marketQualified && universe.eligible && spreadBps !== null && spreadBps >= this.settings.minSpreadBps && !anomalous && indicativeGrossUsd !== null;
     const stage = opportunityQualified ? asset.mapping.confirmed ? 'candidate' : 'needs_mapping' : 'blocked';
     if (!asset.mapping.confirmed) reasons.push('同币、精度与交易池待人工核验');
     const storedEvaluation = this.evaluations[asset.id];
     const evaluation = storedEvaluation && storedEvaluation.assetRevision === asset.revision ? clone(storedEvaluation) : null;
-    if (evaluation && (stage !== 'candidate' || !Number.isFinite(Date.parse(evaluation.expiresAt)) || Date.parse(evaluation.expiresAt) <= now)) {
+    const policyChanged = evaluation?.parentPolicyFingerprint && evaluation.parentPolicyFingerprint !== policyFingerprint(createPolicySnapshot(this.getConfig()));
+    const revisionChanged = evaluation?.parentRevision !== undefined && typeof this.getExecutionRevision === 'function' && evaluation.parentRevision !== this.getExecutionRevision();
+    if (evaluation && (stage !== 'candidate' || evaluation.mode !== this.getConfig()?.mode || policyChanged || revisionChanged || !Number.isFinite(Date.parse(evaluation.expiresAt)) || Date.parse(evaluation.expiresAt) <= now)) {
       evaluation.executable = false; evaluation.reasons = [...new Set([...evaluation.reasons, '复核报价已过期或参考行情不可用'])];
     }
-    return { asset: clone(asset), universe, marketQualified, opportunityQualified, market: { bnb: clone(bnb), solana: clone(solana) }, buyChain, sellChain, spreadBps, indicativeGrossUsd,
+    return { asset: clone(asset), universe, marketQualified, opportunityQualified, anomalous, comparisonStatus, quarantineEvidence, market: { bnb: clone(bnb), solana: clone(solana) }, buyChain, sellChain, spreadBps, indicativeGrossUsd,
       stage, reasons: [...new Set(reasons)], evaluation, executable: evaluation?.executable === true && stage === 'candidate', observedAt: bnb && solana ? Math.min(bnb.observedAt, solana.observedAt) : null,
       feeStatus: evaluation ? 'quoted' : 'unknown', safety: 'unverified', sourceUpdateStatus: 'provider-timestamp-unavailable', generation: market.generation || null };
   }
@@ -386,6 +449,11 @@ export class OpportunityService {
       buyChain: ['bnb','solana'].includes(report.buyChain) ? report.buyChain : null, sellChain: ['bnb','solana'].includes(report.sellChain) ? report.sellChain : null,
       quotedAt: typeof report.quotedAt === 'string' && Number.isFinite(Date.parse(report.quotedAt)) ? report.quotedAt : new Date(this.now()).toISOString(),
       expiresAt: typeof report.expiresAt === 'string' && Number.isFinite(Date.parse(report.expiresAt)) ? report.expiresAt : null };
+    if (typeof report.parentPolicyFingerprint === 'string' && /^[a-f0-9]{64}$/.test(report.parentPolicyFingerprint)) out.parentPolicyFingerprint = report.parentPolicyFingerprint;
+    if (report.parentRevision !== undefined) {
+      if (Number.isSafeInteger(report.parentRevision) && report.parentRevision >= 0) out.parentRevision = report.parentRevision;
+      else { out.executable = false; out.reasons.push('复核报价缺少有效的执行上下文版本'); }
+    }
     for (const key of ['amountUsd','netProfitUsd','grossProfitUsd','gasUsd','slippageUsd','priceImpactBps','spreadBps','bnbGas','solFee','estimatedRentUsd']) out[key] = typeof report[key] === 'number' && Number.isFinite(report[key]) ? report[key] : null;
     if (out.buyChain === out.sellChain || !out.buyChain || !out.sellChain || !out.expiresAt || Date.parse(out.expiresAt) <= this.now() || !['amountUsd','gasUsd','slippageUsd','priceImpactBps','netProfitUsd'].every(key => out[key] !== null) || ['amountUsd','gasUsd','slippageUsd','priceImpactBps'].some(key => out[key] < 0)) {
       out.executable = false; out.reasons.push('复核报价缺少完整费用、方向或有效期');
@@ -406,16 +474,16 @@ export class OpportunityService {
     if (this.lastError && !this.poolError && this.scanProgress.lastScanAt && this.assets.size && status === 'error') { status = 'partial'; reason = `备用目录扫描可继续；${this.lastError}`; }
     const configured = Boolean(this.vault?.publicStatus?.().coingeckoConfigured);
     const eligible = rows.filter(row => row.asset.enabled && row.universe.eligible).length, rejectionCounts = new Map();
-    for (const row of rows.filter(row => !row.universe.eligible || !row.marketQualified)) for (const reason of row.reasons.filter(reason => !reason.includes('人工核验'))) rejectionCounts.set(reason, (rejectionCounts.get(reason) || 0) + 1);
+    for (const row of rows.filter(row => !row.universe.eligible || !row.marketQualified || row.anomalous)) for (const reason of row.reasons.filter(reason => !reason.includes('人工核验'))) rejectionCounts.set(reason, (rejectionCounts.get(reason) || 0) + 1);
     return { enabled: this.enabled, busy: this.busy, revision: this.revision, settings: clone(this.settings), assets: clone([...this.assets.values()]), rows,
       status, reason, notice: this.notice, lastError: this.lastError || null, updatedAt: Math.max(0, ...rows.map(r => r.observedAt || 0)) || null,
       nextRequestAt: gate.nextAt, usage: gate.usage, directoryUpdatedAt: this.directoryUpdatedAt, directoryNextRequestAt: budget.directoryNextAt || null,
       directory: this.directorySnapshot(), credentials: { configured, locked: configured && !this.vault?.getCoinGeckoCredentials?.() },
       scanProgress: clone(this.scanProgress), autoScanPreferred: this.autoScanPreferred, network: this.networkSnapshot(),
-      scope: { kind: 'altcoins', label: '山寨币同币双链', eligible, excluded: rows.length - eligible, reasonCounts: [...rejectionCounts].map(([reason,count]) => ({ reason, count })),
+      scope: { kind: 'altcoins', label: '山寨币同币双链', eligible, excluded: rows.length - eligible, quarantined: rows.filter(row => row.anomalous).length, reasonCounts: [...rejectionCounts].map(([reason,count]) => ({ reason, count })),
         identityNotice: '默认扫描非稳定币、非 BTC／ETH／BNB／SOL 的同币候选；共享目录 ID 和发行方地址只作身份依据，真实套利仍须核验映射、报价、税费和库存。' },
       counts: { total: rows.length, approved: rows.filter(r => r.asset.mapping.confirmed).length, candidate: rows.filter(r => ['candidate','needs_mapping'].includes(r.stage)).length,
-        eligible, excluded: rows.length - eligible, dualActive: rows.filter(r => r.marketQualified && r.universe.eligible).length, opportunities: rows.filter(r => r.opportunityQualified).length, executable: rows.filter(r => r.executable).length }, safety: 'unverified' };
+        eligible, excluded: rows.length - eligible, dualActive: rows.filter(r => r.marketQualified && r.universe.eligible).length, quarantined: rows.filter(r => r.anomalous).length, opportunities: rows.filter(r => r.opportunityQualified).length, executable: rows.filter(r => r.executable).length }, safety: 'unverified' };
   }
   async dispatch(kind, action, { signal, revision }, source = null) {
     if (signal.aborted || revision !== this.revision) return null;
@@ -561,20 +629,18 @@ export class OpportunityService {
           if (!Array.isArray(response)) { this.lastScanFailed = true; return; }
           const pools = response.slice(0, 3000).map(pool => this.cleanPool(pool, chain, addresses)).filter(Boolean);
           for (const asset of batch) {
-            const matches = pools.filter(pool => sameAddress(chain, pool.tokenAddress, asset.chains[chain].address) && (!asset.mapping.confirmed || sameAddress(chain, pool.poolAddress, asset.chains[chain].poolAddress)));
-            const active = pool => pool.liquidityUsd !== null && pool.liquidityUsd >= this.settings.minLiquidityUsd &&
-              (this.settings.minVolume24hUsd === 0 || pool.volume24hUsd !== null && pool.volume24hUsd >= this.settings.minVolume24hUsd) &&
-              (this.settings.minVolume1hUsd === 0 || pool.volume1hUsd !== null && pool.volume1hUsd >= this.settings.minVolume1hUsd) &&
-              (this.settings.minTrades1h === 0 || pool.trades1h !== null && pool.trades1h >= this.settings.minTrades1h);
-            matches.sort((a,b) => Number(active(b)) - Number(active(a)) || (b.liquidityUsd ?? -1) - (a.liquidityUsd ?? -1));
-            if (matches[0]) nextMarkets[asset.id][chain] = matches[0];
+            const matches = pools.filter(pool => sameAddress(chain, pool.tokenAddress, asset.chains[chain].address));
+            const selectedPool = selectReferencePool(matches, { chain, settings: this.settings, now: this.now(), pinnedPoolAddress: asset.mapping.confirmed ? asset.chains[chain].poolAddress : undefined });
+            if (selectedPool.pool) nextMarkets[asset.id][chain] = this.cleanPool({ ...selectedPool.pool, priceConfidence: selectedPool.confidence, priceConflict: selectedPool.quarantined, poolDiagnostics: selectedPool.diagnostics }, chain, addresses);
           }
         }
         this.scanProgress.scannedAssets += batch.length;
       }
       if (context.signal.aborted || context.revision !== this.revision) return;
       for (const asset of selected) { this.markets[asset.id] = { ...nextMarkets[asset.id], generation }; delete this.evaluations[asset.id]; }
-      this.lastScanFailed = false; this.store.setMeta('opportunities.market.v1', this.markets);
+      this.lastScanFailed = false;
+      for (const asset of selected) this.updateComparisonQuarantine(asset);
+      this.store.setMeta('opportunities.market.v1', this.markets);
       this.poolError = null; this.syncErrors();
       const rows = selected.map(asset => this.row(asset));
       this.scanProgress.withBothMarkets = rows.filter(row => row.market.bnb && row.market.solana).length;

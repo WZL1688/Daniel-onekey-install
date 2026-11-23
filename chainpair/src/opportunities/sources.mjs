@@ -82,8 +82,8 @@ export function normalizePools(rows, { chain, addresses, observedAt = Date.now()
     const baseRequested = requested.has(addressKey(chain, baseAddress)), quoteRequested = requested.has(addressKey(chain, pairedAddress));
     if (!baseRequested && (!quoteRequested || nativePrice === null)) continue;
     const directions = [];
-    if (baseRequested) directions.push({ tokenAddress: baseAddress, quoteAddress: pairedAddress, priceUsd: baseUsd });
-    if (quoteRequested && nativePrice !== null && Number.isFinite(baseUsd / nativePrice) && baseUsd / nativePrice > 0) directions.push({ tokenAddress: pairedAddress, quoteAddress: baseAddress, priceUsd: baseUsd / nativePrice });
+    if (baseRequested) directions.push({ tokenAddress: baseAddress, quoteAddress: pairedAddress, priceUsd: baseUsd, priceMethod: 'provider-base-usd' });
+    if (quoteRequested && nativePrice !== null && Number.isFinite(baseUsd / nativePrice) && baseUsd / nativePrice > 0) directions.push({ tokenAddress: pairedAddress, quoteAddress: baseAddress, priceUsd: baseUsd / nativePrice, priceMethod: 'derived-from-base-native' });
     for (const direction of directions) {
       const result = { chain, ...direction, poolAddress,
         liquidityUsd: numeric(row.liquidity?.usd), volume24hUsd: numeric(row.volume?.h24), volume1hUsd: numeric(row.volume?.h1),

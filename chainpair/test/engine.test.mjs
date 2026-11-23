@@ -19,7 +19,9 @@ class TestAdapter extends DemoAdapter {
   async quoteTokenBridge(input) { if (this.options.bridgeDelay) await pause(this.options.bridgeDelay); this.calls.push({ method: 'bridge', ...input }); const q = await super.quoteTokenBridge(input); if (this.options.rebuiltBridgeGas && this.sent.length) q.bnbGas = this.options.rebuiltBridgeGas; return q; }
   async balances(chain) { if (this.options.funds) return { tokenRaw: '99999999999999999999999999', ...this.options.funds[chain] }; return super.balances(chain); }
   async submit(quote, { onSubmitted } = {}) {
-    const trade = this.store.allTrades()[0];
+    const intent = this.store.getQuote(quote.id);
+    assert.ok(intent?.tradeId, 'the submitted quote must already identify its durable trade');
+    const trade = this.store.getTrade(intent.tradeId);
     assert.equal(trade.status, `${stage(quote)}_SUBMITTING`, 'intent must be durable before broadcast');
     const submission = { hash: `test-${this.sent.length}`, quote };
     this.sent.push(submission); await onSubmitted?.(submission); return submission;

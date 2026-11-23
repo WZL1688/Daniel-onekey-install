@@ -61,14 +61,11 @@ try {
   await expect(page.locator('#opp-source-attempts')).toContainText('CoinPaprika BNB 合约目录');
   await expect(page.locator('#opp-source-attempts')).toContainText('CoinPaprika Solana 合约目录');
   const filter = page.locator('#opp-filter'), cards = page.locator('#opp-assets article.opp-asset'), visibleIds = () => cards.evaluateAll(nodes => nodes.map(node => node.dataset.assetId));
-  await expect(filter).toHaveValue('altcoins'); await expect(cards).toHaveCount(4);
-  assert.deepEqual(new Set(await visibleIds()), new Set(['alt1', 'alt2', 'quiet', 'anomaly']));
-  await expect(page.locator('#opp-assets .opp-compact-row')).toHaveCount(4);
+  await expect(filter).toHaveValue('altcoins'); await expect(cards).toHaveCount(3);
+  assert.deepEqual(new Set(await visibleIds()), new Set(['alt1', 'alt2', 'quiet']));
+  await expect(page.locator('#opp-assets .opp-compact-row')).toHaveCount(3);
   await expect(cards.first()).toHaveAttribute('data-asset-id', 'alt1');
-  const anomaly = page.locator('[data-asset-id=anomaly]');
-  await expect(anomaly.locator('.opp-compact-spread')).toContainText('异常价差，待核对');
-  await expect(anomaly.locator('.opp-compact-spread > strong')).toHaveClass(/negative/);
-  assert.equal(await anomaly.locator('.opp-compact-spread > strong.positive').count(), 0);
+  await expect(page.locator('[data-asset-id=anomaly]')).toHaveCount(0);
   assert.equal(await page.locator('#opp-assets details.opp-asset-details[open]').count(), 0, 'Full identity and mapping editors remain collapsed in compact rows');
   await expect(page.locator('#opp-universe-summary')).toContainText('山寨币');
   await expect(page.locator('#opp-rejection-summary')).toContainText('稳定币');
@@ -82,8 +79,12 @@ try {
 
   await filter.selectOption('candidate'); await expect(cards).toHaveCount(2); assert.deepEqual(new Set(await visibleIds()), new Set(['alt1', 'alt2']));
   await filter.selectOption('approved'); await expect(cards).toHaveCount(1); await expect(cards).toHaveAttribute('data-asset-id', 'alt2');
-  await filter.selectOption('excluded'); await expect(cards).toHaveCount(5);
-  assert.deepEqual(new Set(await visibleIds()), new Set(['one-side', 'stable', 'major', 'unknown', 'blocked']));
+  await filter.selectOption('excluded'); await expect(cards).toHaveCount(6);
+  assert.deepEqual(new Set(await visibleIds()), new Set(['anomaly', 'one-side', 'stable', 'major', 'unknown', 'blocked']));
+  const anomaly = page.locator('[data-asset-id=anomaly]');
+  await expect(anomaly.locator('.opp-compact-spread')).toContainText('异常价差，待核对');
+  await expect(anomaly.locator('.opp-compact-spread > strong')).toHaveClass(/negative/);
+  assert.equal(await anomaly.locator('.opp-compact-spread > strong.positive').count(), 0);
   await expect(page.locator('#opp-assets')).toContainText('稳定币'); await expect(page.locator('#opp-assets')).toContainText('主流'); await expect(page.locator('#opp-assets')).toContainText('Solana');
   assert.equal(await page.locator('#opp-assets img').count(), 0); assert.equal(await page.evaluate(() => Boolean(window.altcoinInjection)), false);
   await filter.selectOption('all'); await expect(cards).toHaveCount(9);
@@ -105,7 +106,7 @@ try {
   const saved = calls.find(call => call.method === 'POST');
   assert.equal(saved.pathname, '/api/opportunities/settings');
   for (const [key, value] of Object.entries({ includeStablecoins: true, includeMajors: false, minVolume24hUsd: 20000, minVolume1hUsd: 250, minTrades1h: 5, maxSideSkewMs: 20000, maxSpreadBps: 1200 })) assert.equal(saved.body.settings[key], value, `Settings conversion for ${key}`);
-  await filter.selectOption('altcoins'); await expect(cards).toHaveCount(5); assert.equal((await visibleIds()).includes('stable'), true, 'Server-confirmed eligibility after explicit opt-in is respected');
+  await filter.selectOption('altcoins'); await expect(cards).toHaveCount(4); assert.equal((await visibleIds()).includes('stable'), true, 'Server-confirmed eligibility after explicit opt-in is respected');
   await expect(page.locator('#opp-excluded-count')).toHaveText('3');
   await page.setViewportSize({ width: 390, height: 844 }); assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   assert.deepEqual(forbidden, []); assert.deepEqual(errors, []);

@@ -60,7 +60,7 @@ export function createApp({engine,store,vault,browserWallets,reviewService,radar
     if(!['GET','HEAD'].includes(req.method)&&!isEqual(req.headers['x-csrf-token'],csrfToken))return res.status(403).json({error:'请求校验失败，请刷新页面'});
     next();
   });
-  app.get('/api/state',asyncRoute(async(req,res)=>res.json({...(await engine.snapshot()),appVersion:APP_VERSION})));
+  app.get('/api/state',asyncRoute(async(req,res)=>res.json({...(await engine.snapshot()),appVersion:APP_VERSION,features:{opportunities:Boolean(opportunityService)}})));
   app.get('/api/opportunities',asyncRoute(async(req,res)=>res.json({...opportunities().snapshot(),execution:coordinator().snapshot()})));
   app.post('/api/opportunities/credentials',asyncRoute(async(req,res)=>{
     const service=opportunities();if(typeof service.credentialsChanged!=='function')throw safe('目录凭证服务未启用，请更新并重启程序');
