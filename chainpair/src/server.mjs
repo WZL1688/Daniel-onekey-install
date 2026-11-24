@@ -11,7 +11,7 @@ const isEqual=(a,b)=>{if(typeof a!=='string'||typeof b!=='string')return false;c
 const safe=(message)=>Object.assign(new Error(message),{safe:true});
 const asyncRoute=(handler)=>(req,res,next)=>Promise.resolve(handler(req,res)).catch(next);
 const cookieValue=(raw,name)=>{for(const cookie of (raw||'').split(';')){const i=cookie.indexOf('=');if(cookie.slice(0,i).trim()===name)return cookie.slice(i+1).trim();}return '';};
-export function createApp({engine,store,vault,browserWallets,reviewService,radarService,opportunityService,inventoryCoordinator,qualityService,publicDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../public')}={}){
+export function createApp({engine,store,vault,browserWallets,reviewService,radarService,opportunityService,inventoryCoordinator,qualityService,readinessService,approvalService,publicDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../public')}={}){
   const app=express();app.disable('x-powered-by');
   app.use((req,res,next)=>{res.setHeader('X-ChainPair-Version',APP_VERSION);next();});
   const busy=()=>engine.busy||engine.snapshot()?.engine?.busy;
@@ -40,6 +40,8 @@ export function createApp({engine,store,vault,browserWallets,reviewService,radar
   const opportunities=()=>{if(!opportunityService)throw safe('同币机会服务未启用，请更新并重启程序');return opportunityService;};
   const coordinator=()=>{if(!inventoryCoordinator)throw safe('库存执行服务未启用，请更新并重启程序');return inventoryCoordinator;};
   const quality=()=>{if(!qualityService)throw safe('真实只读报价复核未启用，请更新并重启程序');return qualityService;};
+  const readiness=()=>{if(!readinessService)throw safe('实盘预检未启用，请更新并重启程序');return readinessService;};
+  const approvals=()=>{if(!approvalService)throw safe('有限授权服务未启用，请更新并重启程序');return approvalService;};
   const registryChange=()=>{if(engine.busy||engine.configuring)throw safe('交易或配置更新进行中，暂不能变更同币清单');};
   const assetId=value=>{if(typeof value!=='string'||!value||value.length>160)throw safe('同币清单编号无效');return value;};
   const expectedMode=value=>{if(!['demo','live'].includes(value)||value!==engine.config.mode)throw safe('页面运行模式已变化，请刷新并核对模拟／实盘后重试');};
@@ -63,7 +65,26 @@ export function createApp({engine,store,vault,browserWallets,reviewService,radar
     if(!['GET','HEAD'].includes(req.method)&&!isEqual(req.headers['x-csrf-token'],csrfToken))return res.status(403).json({error:'请求校验失败，请刷新页面'});
     next();
   });
-  app.get('/api/state',asyncRoute(async(req,res)=>res.json({...(await engine.snapshot()),appVersion:APP_VERSION,features:{opportunities:Boolean(opportunityService),quality:Boolean(qualityService),performance:typeof store?.allTrades==='function'}})));
+  app.get('/api/state',asyncRoute(async(req,res)=>res.json({...(await engine.snapshot()),appVersion:APP_VERSION,features:{opportunities:Boolean(opportunityService),quality:Boolean(qualityService),performance:typeof store?.allTrades==='function',liveReadiness:Boolean(readinessService),bnbApprovals:Boolean(approvalService)}})));
+  app.get('/api/live-readiness',asyncRoute(async(req,res)=>res.json(readiness().snapshot())));
+  app.post('/api/live-readiness/check',asyncRoute(async(req,res)=>{
+    expectedMode(req.body?.expectedMode);
+    let id;
+    if(req.body?.assetId!==undefined){id=validId(req.body.assetId);assetRevision(id,req.body?.revision);}
+    res.json(await readiness().check(id?{assetId:id}:{}));
+  }));
+  app.get('/api/bnb-approvals',asyncRoute(async(req,res)=>res.json(approvals().snapshot())));
+  app.post('/api/bnb-approvals/prepare',asyncRoute(async(req,res)=>{
+    expectedMode(req.body?.expectedMode);
+    if(typeof req.body?.reportId!=='string'||req.body.reportId.length>100||!Number.isSafeInteger(req.body?.index)||req.body.index<0||req.body.index>10)throw safe('授权审阅编号无效，请重新预检');
+    res.json(await approvals().prepare({reportId:req.body.reportId,index:req.body.index}));
+  }));
+  app.post('/api/bnb-approvals/execute',asyncRoute(async(req,res)=>{
+    expectedMode(req.body?.expectedMode);
+    if(engine.config.mode!=='live')throw safe('发送有限授权须先明确选择实盘模式，再重新预检和审阅');
+    if(req.body?.confirmed!==true||typeof req.body?.intentId!=='string'||req.body.intentId.length>100)throw safe('请先审阅并明确确认本笔有限授权');
+    res.status(202).json(await approvals().execute({intentId:req.body.intentId,expectedMode:req.body.expectedMode,confirmed:true}));
+  }));
   app.get('/api/performance',asyncRoute(async(req,res)=>{
     if(typeof store?.allTrades!=='function')throw safe('实盘证据统计未启用，请更新并重启程序');
     if(req.query.mode!==undefined&&req.query.mode!=='live')throw safe('成功率证据仅统计实盘，模拟记录不能作为盈利证据');

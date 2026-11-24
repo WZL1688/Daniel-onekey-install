@@ -52,6 +52,21 @@ const decimal = value => { const d = new Decimal(value); if (!d.isFinite()) thro
 const json = value => JSON.parse(JSON.stringify(value, (_, x) => typeof x === 'bigint' ? x.toString() : x));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const unit = (amount, decimals) => decimal(amount).div(new Decimal(10).pow(decimals));
+const quoteTokenRisk = token => {
+  const flag = token?.isHoneyPot;
+  const knownFalse = flag === false || flag === 0 || flag === 'false' || flag === '0';
+  if (flag === true || flag === 1 || flag === 'true' || flag === '1') throw new AdapterError('TOKEN_RISK：报价来源标记为貔貅代币，禁止交易');
+  if (flag !== undefined && flag !== null && !knownFalse) throw new AdapterError('TOKEN_RISK：报价风险标记格式不受支持，禁止交易');
+  const tax = token?.taxRate;
+  if (tax !== undefined && tax !== null && tax !== '') {
+    if (!['string', 'number'].includes(typeof tax)) throw new AdapterError('TOKEN_RISK：转账税数据无效');
+    let rate;
+    try { rate = decimal(tax); } catch { throw new AdapterError('TOKEN_RISK：转账税数据无效'); }
+    if (rate.lt(0)) throw new AdapterError('TOKEN_RISK：转账税数据无效');
+    if (rate.gt(0)) throw new AdapterError('TOKEN_RISK：当前实盘不支持带转账税的代币');
+  }
+  return { honeypot: knownFalse ? 'source-not-flagged' : 'unknown', transferTax: tax !== undefined && tax !== null && tax !== '' ? 'source-zero' : 'unknown' };
+};
 
 export function verifyPublishedEvmTransaction(expected, actual, hash) {
   try {
@@ -104,7 +119,10 @@ export function decodeSplAccount(account) {
   if (!account || account.owner !== TOKEN_PROGRAMS[0] || !Array.isArray(account.data) || account.data[1] !== 'base64') throw new AdapterError('Solana 模拟代币账户格式不支持');
   const bytes = Buffer.from(account.data[0], 'base64');
   if (bytes.length !== 165) throw new AdapterError('仅支持 165 字节经典 SPL Token 账户');
-  return { mint: new PublicKey(bytes.subarray(0, 32)).toBase58(), owner: new PublicKey(bytes.subarray(32, 64)).toBase58(), amount: bytes.readBigUInt64LE(64), authority: Buffer.concat([bytes.subarray(72, 109), bytes.subarray(129, 165)]).toString('hex') };
+  return { mint: new PublicKey(bytes.subarray(0, 32)).toBase58(), owner: new PublicKey(bytes.subarray(32, 64)).toBase58(), amount: bytes.readBigUInt64LE(64),
+    // All non-balance control fields must remain unchanged: delegate, state,
+    // wrapped-native reserve, delegated amount and close authority.
+    authority: bytes.subarray(72, 165).toString('hex'), delegateOption: bytes.readUInt32LE(72), closeAuthorityOption: bytes.readUInt32LE(129), state: bytes[108] };
 }
 export function validateSolanaSimulationTokens({ quote, beforeAccounts, afterAccounts }) {
   if (beforeAccounts.length !== afterAccounts.length) throw new AdapterError('Solana 模拟账户数量不一致');
@@ -114,6 +132,7 @@ export function validateSolanaSimulationTokens({ quote, beforeAccounts, afterAcc
     if (!before && !after) continue;
     if ((before && before.owner !== quote.sender) || (after && after.owner !== quote.sender) || (before && after && (before.mint !== after.mint || before.authority !== after.authority))) throw new AdapterError('Solana 模拟修改了代币账户所有权、mint 或授权');
     if (before && !after) throw new AdapterError('Solana 模拟关闭了已有代币账户');
+    if (!before && after && (after.delegateOption !== 0 || after.closeAuthorityOption !== 0 || after.state !== 1)) throw new AdapterError('Solana 模拟新建账户含额外授权、关闭权限或无效状态');
     const mint = after?.mint ?? before.mint;
     net.set(mint, (net.get(mint) ?? 0n) + (after?.amount ?? 0n) - (before?.amount ?? 0n));
   }
@@ -204,6 +223,10 @@ export class LiveAdapter {
   }
   checkPool(chain, route) {
     const c = this.config(chain);
+    // Aggregator mode is explicitly selected by the user. Its execution route
+    // is validated by token/amount/recipient intent, reviewed ABI/programs and
+    // transaction simulation; the scanner's reference pool is not its route.
+    if (c.routingMode === 'aggregator') return;
     if (c.poolAddress && c.requirePoolMatch !== false && !JSON.stringify(route).toLowerCase().includes(c.poolAddress.toLowerCase())) throw new AdapterError('POOL_ROUTE_UNVERIFIED：OKX 路线未返回指定池地址，无法验证按配置池执行');
   }
   remember(quote) {
@@ -213,7 +236,8 @@ export class LiveAdapter {
   assertQuoteFresh(quote) {
     if (!Number.isFinite(Date.parse(quote?.expiresAt)) || Date.parse(quote.expiresAt) <= Date.now()) throw new AdapterError('报价已过期，未签名或广播新的交易，请重新报价');
   }
-  async quoteSwap({ chain, fromToken, toToken, amountRaw }) {
+  async quoteSwap({ chain, fromToken, toToken, amountRaw, allowUnapproved = false }) {
+    if (typeof allowUnapproved !== 'boolean') throw new AdapterError('授权查询选项无效');
     positive(amountRaw); const c = this.getConfig(), wallet = this.wallet(chain);
     await Promise.all([this.validateToken(chain, fromToken), this.validateToken(chain, toToken)]);
     const requestedAt = new Date().toISOString();
@@ -223,8 +247,10 @@ export class LiveAdapter {
     const receivedAt = new Date().toISOString();
     const route = result.routerResult;
     if (!route || !result.tx) throw new AdapterError('OKX swap 响应结构不受支持');
+    if (result.tx.signatureData !== undefined && result.tx.signatureData !== null && result.tx.signatureData !== '') throw new AdapterError('UNSUPPORTED_SIGNATURE_DATA：该路线要求额外签名，当前不支持');
     if (String(route.chainIndex) !== CHAINS[chain] || !same(chain, route.fromToken?.tokenContractAddress, fromToken.address) || !same(chain, route.toToken?.tokenContractAddress, toToken.address) || raw(route.fromTokenAmount) !== amountRaw) throw new AdapterError('OKX 报价链、代币或数量不匹配');
     this.checkPool(chain, route);
+    const tokenRisk = { from: quoteTokenRisk(route.fromToken), to: quoteTokenRisk(route.toToken) };
     if (route.priceImpactPercent === null || route.priceImpactPercent === undefined || route.priceImpactPercent === '') throw new AdapterError('报价缺少可验证价格冲击');
     const impact = decimal(route.priceImpactPercent).abs().mul(100).toNumber();
     if (impact > c.risk.maxPriceImpactBps) throw new AdapterError('价格冲击超过限制');
@@ -232,8 +258,12 @@ export class LiveAdapter {
     const fee = await this.estimateFee(chain, result.tx);
     const quote = { id: randomUUID(), kind: 'swap', fromChain: chain, toChain: chain, fromToken, toToken, sender: wallet, recipient: wallet,
       amountInRaw: amountRaw, amountOutRaw: out, minOutRaw: minimum, feeUsd: fee.feeUsd, estimatedRentUsd: fee.estimatedRentUsd, bnbGas: fee.bnbGas, solFee: fee.solFee,
-      priceImpactBps: impact, requestedAt, receivedAt, expiresAt: new Date(Date.parse(requestedAt) + (c.quoteTtlMs ?? 20000)).toISOString(), raw: result, tx: result.tx, fromUnitUsd: route.fromToken.tokenUnitPrice, toUnitUsd: route.toToken.tokenUnitPrice };
-    if (chain === 'bnb') { await this.validateEvmTx(quote, quote.tx); await this.assertAllowance(quote); } else await this.validateSolanaTx(quote, this.decodeSolana(quote.tx.data));
+      priceImpactBps: impact, tokenRisk, requestedAt, receivedAt, expiresAt: new Date(Date.parse(requestedAt) + (c.quoteTtlMs ?? 20000)).toISOString(), raw: result, tx: result.tx, fromUnitUsd: route.fromToken.tokenUnitPrice, toUnitUsd: route.toToken.tokenUnitPrice };
+    if (chain === 'bnb') {
+      await this.validateEvmTx(quote, quote.tx);
+      if (allowUnapproved) quote.approvalRequirement = await this.allowanceRequirement(quote);
+      else await this.assertAllowance(quote);
+    } else await this.validateSolanaTx(quote, this.decodeSolana(quote.tx.data));
     quote.validatedAt = new Date().toISOString(); this.assertQuoteFresh(quote);
     return this.remember(quote);
   }
@@ -366,6 +396,99 @@ export class LiveAdapter {
     if (fee.solFee > this.getConfig().risk.maxSolFee) throw new AdapterError('Solana 网络费超过限制');
     return fee;
   }
+  cachedQuote(externalQuote) {
+    const quote = this.quotes.get(externalQuote?.id);
+    if (!quote || JSON.stringify(quote) !== JSON.stringify(externalQuote)) throw new AdapterError('报价未知或已被修改，请重新报价');
+    this.assertQuoteFresh(quote);
+    if (this.used.has(quote.id)) throw new AdapterError('报价已提交，禁止复用预检结果');
+    if (!same(quote.fromChain, this.wallet(quote.fromChain), quote.sender) || !same(quote.toChain, this.wallet(quote.toChain), quote.recipient)) throw new AdapterError('钱包已变更，必须重新报价');
+    return quote;
+  }
+  async simulateEvmTransaction(quote) {
+    this.assertQuoteFresh(quote);
+    const tx = quote.tx, gas = BigInt(tx.gas ?? tx.gasLimit), gasPrice = BigInt(tx.gasPrice ?? tx.maxFeePerGas);
+    if (gas <= 0n || gasPrice <= 0n) throw new AdapterError('BNB 交易 Gas 参数无效');
+    const request = { from: quote.sender, to: tx.to, data: tx.data, value: `0x${BigInt(tx.value ?? 0).toString(16)}`, gas: `0x${gas.toString(16)}`, gasPrice: `0x${gasPrice.toString(16)}` };
+    let result, estimated;
+    try {
+      result = await this.rpc.bnb.call('eth_call', [request, 'pending']);
+      this.assertQuoteFresh(quote);
+      estimated = await this.rpc.bnb.call('eth_estimateGas', [request, 'pending']);
+    } catch (error) {
+      if (error?.safe) throw error;
+      throw new AdapterError('BNB 未签名交易模拟失败；请核对余额、授权、Gas 上限、路线和 RPC 支持');
+    }
+    let estimate;
+    try { estimate = BigInt(estimated); } catch { throw new AdapterError('BNB 模拟缺少可核验 Gas 估算'); }
+    if (estimate <= 0n || estimate > gas) throw new AdapterError('BNB 模拟 Gas 需求超过冻结报价的 Gas 上限，禁止执行');
+    let outputVerified = false, simulatedOutRaw = null;
+    if (quote.kind === 'swap') {
+      let decoded;
+      try { decoded = ROUTER_ABI.parseTransaction({ data: tx.data, value: tx.value ?? 0 }); } catch {}
+      if (!decoded?.fragment) throw new AdapterError('BNB 模拟无法解码已核验交易方法');
+      if (decoded.fragment.outputs?.length) {
+        let values;
+        try { values = ROUTER_ABI.decodeFunctionResult(decoded.fragment, result); } catch { throw new AdapterError('BNB 模拟未返回已核验 ABI 要求的到账数量'); }
+        if (values.length !== 1 || typeof values[0] !== 'bigint') throw new AdapterError('BNB 模拟返回数量格式不受支持');
+        if (values[0] < BigInt(quote.minOutRaw)) throw new AdapterError('BNB 模拟输出低于最低到账，禁止执行');
+        simulatedOutRaw = values[0].toString(); outputVerified = true;
+      }
+    }
+    this.assertQuoteFresh(quote);
+    return { outputVerified, simulatedOutRaw, estimatedGas: estimate.toString(), gasLimit: gas.toString() };
+  }
+  /** Read-only simulation over this exact cached quote; never obtains a signer. */
+  async preflightSwap(externalQuote) {
+    const quote = this.cachedQuote(externalQuote);
+    if (quote.kind !== 'swap' || quote.fromChain !== quote.toChain || !['bnb', 'solana'].includes(quote.fromChain)) throw new AdapterError('未签名成交预检仅支持同链兑换');
+    const chain = quote.fromChain, c = this.getConfig();
+    const balances = await this.balances(chain);
+    const fee = chain === 'bnb' ? await this.validateEvmTx(quote, quote.tx) : await this.validateSolanaTx(quote, this.decodeSolana(quote.tx.data));
+    const reserve = chain === 'bnb' ? c.risk.reserveBnb : c.risk.reserveSol, nativeFee = chain === 'bnb' ? fee.bnbGas : fee.solFee;
+    if (!Number.isFinite(nativeFee) || nativeFee < 0 || !Number.isFinite(balances.native) || decimal(balances.native).minus(nativeFee).lt(reserve)) throw new AdapterError('预检原生币不足以支付费用并保留 Gas 资金');
+    if (BigInt(await this.balanceRaw(chain, quote.fromToken)) < BigInt(quote.amountInRaw)) throw new AdapterError('预检输入代币余额不足，禁止模拟为可执行');
+    const checks = ['cached-quote-immutable', 'wallet-identity', 'token-amount-recipient-intent', 'native-reserve', 'input-balance'];
+    let evidence;
+    if (chain === 'bnb') {
+      await this.assertAllowance(quote);
+      evidence = await this.simulateEvmTransaction(quote);
+      checks.push('allowance', 'pending-eth-call-with-frozen-gas', 'gas-estimate-within-quote');
+      if (evidence.outputVerified) checks.push('simulated-output-at-least-minimum');
+    } else {
+      const transaction = this.decodeSolana(quote.tx.data);
+      if (transaction.signatures.length !== 1 || transaction.signatures.some(signature => signature.some(byte => byte !== 0))) throw new AdapterError('未签名预检要求单一钱包的空签名交易');
+      const owned = (await this.rpc.solana.call('getTokenAccountsByOwner', [quote.sender, { programId: TOKEN_PROGRAMS[0] }, { encoding: 'base64', commitment: 'confirmed' }])).value;
+      if (!Array.isArray(owned)) throw new AdapterError('Solana 未返回可核验的代币账户列表');
+      const addresses = [], beforeAccounts = [];
+      for (const account of owned) {
+        let address; try { address = new PublicKey(account?.pubkey).toBase58(); } catch { throw new AdapterError('Solana 自有代币账户地址无效'); }
+        if (addresses.includes(address)) throw new AdapterError('Solana 自有代币账户重复，无法核对实际变动');
+        addresses.push(address); beforeAccounts.push(account.account);
+      }
+      const [ata] = PublicKey.findProgramAddressSync([new PublicKey(quote.sender).toBuffer(), new PublicKey(TOKEN_PROGRAMS[0]).toBuffer(), new PublicKey(quote.toToken.address).toBuffer()], new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL'));
+      if (!addresses.includes(ata.toBase58())) {
+        const account = (await this.rpc.solana.call('getAccountInfo', [ata.toBase58(), { encoding: 'base64', commitment: 'confirmed' }]))?.value;
+        addresses.push(ata.toBase58()); beforeAccounts.push(account ?? null);
+      }
+      if (addresses.length > 99) throw new AdapterError('Solana 自有代币账户超过模拟核验上限 99');
+      let simulation;
+      try { simulation = await this.rpc.solana.call('simulateTransaction', [Buffer.from(transaction.serialize()).toString('base64'), { encoding: 'base64', sigVerify: false, replaceRecentBlockhash: false, commitment: 'confirmed', accounts: { encoding: 'base64', addresses: [quote.sender, ...addresses] } }]); }
+      catch { throw new AdapterError('Solana 未签名交易模拟失败；请核对区块哈希、余额、路线和 RPC 支持'); }
+      if (!simulation?.value || simulation.value.err !== null || !Array.isArray(simulation.value.accounts) || simulation.value.accounts.length !== addresses.length + 1) throw new AdapterError('Solana 未签名模拟失败或缺少完整账户回执');
+      const postLamports = simulation.value.accounts[0]?.lamports;
+      if (!Number.isSafeInteger(postLamports) || postLamports < 0 || !/^\d+$/.test(String(balances.nativeRaw))) throw new AdapterError('Solana 模拟未返回可核验钱包余额');
+      const debitRaw = BigInt(balances.nativeRaw) - BigInt(postLamports), debit = unit(debitRaw > 0n ? debitRaw : 0n, 9);
+      if (debit.gt(c.risk.maxSolFee) || unit(postLamports, 9).lt(reserve)) throw new AdapterError('Solana 模拟费用或租金超过限制，或 Gas 储备不足');
+      if (debit.gt(new Decimal(fee.solFee).plus('0.000000001'))) throw new AdapterError('Solana 模拟实际扣款高于冻结报价费用估算，禁止执行');
+      validateSolanaSimulationTokens({ quote, beforeAccounts, afterAccounts: simulation.value.accounts.slice(1) });
+      evidence = { outputVerified: true, feeNative: debit.toNumber() };
+      checks.push('unsigned-simulate-transaction', 'exact-input-debit', 'simulated-output-at-least-minimum', 'unchanged-unrelated-tokens-and-authority', 'simulated-native-fee-and-reserve');
+    }
+    this.cachedQuote(quote);
+    return { verified: true, readOnly: true, chain, quoteId: quote.id, checkedAt: new Date().toISOString(), expiresAt: quote.expiresAt, checks, ...evidence,
+      onChainMinimumDecoded: chain === 'bnb',
+      limitations: chain === 'solana' ? ['当前 Solana 路由程序的指令最小到账字段尚未独立解码；本结果仅验证当前状态模拟，不保证上链时的最小到账或成交。'] : evidence.outputVerified ? [] : ['该方法 ABI 不返回到账数量；已验证调用和已解码最小到账参数，未取得模拟余额变动证据。'] };
+  }
   async submit(externalQuote, { onSubmitted = async () => {}, beforeBroadcast = () => {} } = {}) {
     const quote = this.quotes.get(externalQuote.id);
     if (!quote || JSON.stringify(quote) !== JSON.stringify(externalQuote)) throw new AdapterError('报价未知或已被修改，请重新报价');
@@ -375,7 +498,7 @@ export class LiveAdapter {
     if (!same(quote.fromChain, this.wallet(quote.fromChain), quote.sender) || !same(quote.toChain, this.wallet(quote.toChain), quote.recipient)) throw new AdapterError('钱包已变更，必须重新报价');
     const wallet = this.vault.publicStatus()[quote.fromChain], browser = wallet?.mode === 'browser';
     if (browser && (!wallet.canSign || !this.browserWallets)) throw new AdapterError('插件钱包未连接，请保持本机页面打开并重新连接');
-    const signer = browser ? null : await this.vault.signer(quote.fromChain);
+    let signer;
     let balances = await this.balances(quote.fromChain);
     const c = this.getConfig();
     const fee = quote.fromChain === 'bnb' ? await this.validateEvmTx(quote, quote.tx) : await this.validateSolanaTx(quote, this.decodeSolana(quote.tx.data));
@@ -389,12 +512,13 @@ export class LiveAdapter {
     if (quote.fromChain === 'bnb') {
       const tx = quote.tx;
       const request = { to: tx.to, data: tx.data, value: BigInt(tx.value ?? 0), chainId: 56, gasLimit: BigInt(tx.gas ?? tx.gasLimit), gasPrice: BigInt(tx.gasPrice ?? tx.maxFeePerGas) };
-      await this.rpc.bnb.call('eth_call', [{ from: quote.sender, to: request.to, data: request.data, value: `0x${request.value.toString(16)}` }, 'pending']);
+      await this.simulateEvmTransaction(quote);
       assertReady();
       if (browser) return this.submitBrowserEvm(quote, request, onSubmitted, assertReady);
       const nonce = await this.rpc.bnb.call('eth_getTransactionCount', [quote.sender, 'pending']);
       request.nonce = Number(BigInt(nonce));
       assertReady();
+      signer = await this.vault.signer(quote.fromChain); assertReady();
       signed = await signer.signTransaction(request); hash = keccak256(signed);
     } else {
       let transaction = this.decodeSolana(quote.tx.data);
@@ -410,7 +534,7 @@ export class LiveAdapter {
         if (Date.parse(quote.expiresAt) <= Date.now()) throw new AdapterError('插件签名期间报价已过期，未广播交易，请重新报价');
         balances = await this.balances('solana');
         if (decimal(balances.native).minus(fee.solFee).lt(reserve)) throw new AdapterError('签名后原生币余额变化，Gas 储备不足，未广播交易');
-      } else { assertReady(); transaction.sign([signer]); }
+      } else { assertReady(); signer = await this.vault.signer(quote.fromChain); assertReady(); transaction.sign([signer]); }
       signed = Buffer.from(transaction.serialize()).toString('base64'); hash = bs58.encode(transaction.signatures[0]);
       const owned = (await this.rpc.solana.call('getTokenAccountsByOwner', [quote.sender, { programId: TOKEN_PROGRAMS[0] }, { encoding: 'base64', commitment: 'confirmed' }])).value ?? [];
       const addresses = owned.map(a => a.pubkey), beforeAccounts = owned.map(a => a.account);
@@ -420,11 +544,12 @@ export class LiveAdapter {
       }
       if (addresses.length > 99) throw new AdapterError('Solana 自有代币账户超过模拟核验上限 99，禁止签名');
       const simulation = await this.rpc.solana.call('simulateTransaction', [signed, { encoding: 'base64', sigVerify: true, commitment: 'confirmed', accounts: { encoding: 'base64', addresses: [quote.sender, ...addresses] } }]);
-      if (simulation.value?.err) throw new AdapterError(`Solana 模拟失败：${JSON.stringify(simulation.value.err)}`);
+      if (!simulation?.value || simulation.value.err !== null || !Array.isArray(simulation.value.accounts) || simulation.value.accounts.length !== addresses.length + 1) throw new AdapterError('Solana 已签名模拟失败或缺少完整账户回执，未广播交易');
       const postLamports = simulation.value?.accounts?.[0]?.lamports;
-      if (postLamports === undefined) throw new AdapterError('Solana 模拟未返回钱包余额，无法验证原生币扣款');
-      const debit = Math.max(0, Number(balances.nativeRaw) - Number(postLamports)) / 1e9;
-      if (debit > c.risk.maxSolFee || Number(postLamports) / 1e9 < c.risk.reserveSol) throw new AdapterError('Solana 模拟网络费与租金总扣款超过限制或 Gas 储备不足');
+      if (!Number.isSafeInteger(postLamports) || postLamports < 0 || !/^\d+$/.test(String(balances.nativeRaw))) throw new AdapterError('Solana 模拟未返回可核验钱包余额，无法验证原生币扣款');
+      const debitRaw = BigInt(balances.nativeRaw) - BigInt(postLamports), debit = unit(debitRaw > 0n ? debitRaw : 0n, 9);
+      if (debit.gt(c.risk.maxSolFee) || unit(postLamports, 9).lt(c.risk.reserveSol)) throw new AdapterError('Solana 模拟网络费与租金总扣款超过限制或 Gas 储备不足');
+      if (debit.gt(new Decimal(fee.solFee).plus('0.000000001'))) throw new AdapterError('Solana 模拟实际扣款高于冻结报价费用估算，禁止执行');
       validateSolanaSimulationTokens({ quote, beforeAccounts, afterAccounts: simulation.value.accounts.slice(1) });
       assertReady();
     }
@@ -466,7 +591,9 @@ export class LiveAdapter {
       throw new AdapterError('RPC 暂未找到插件已发送的 BNB 交易，结果不确定，请核对哈希，禁止重发');
     } catch (error) { error.hash = hash; error.sourceHash = hash; throw error; }
   }
-  async assertAllowance(quote) {
+  async allowanceRequirement(quote) {
+    if (quote.fromChain !== 'bnb') throw new AdapterError('ERC20 授权查询仅支持 BNB Chain');
+    getAddress(quote.fromToken.address); getAddress(quote.sender); positive(quote.amountInRaw);
     let spender;
     if (quote.kind === 'bridge') {
       const response = await this.okx('/api/v6/dex/cross-chain/approve-tx', { chainIndex: '56', tokenContractAddress: quote.fromToken.address, userWalletAddress: quote.sender, bridgeId: quote.bridgeId, approveAmount: quote.amountInRaw, checkAllowance: 'true' });
@@ -475,10 +602,17 @@ export class LiveAdapter {
       const response = await this.okx('/api/v6/dex/aggregator/approve-transaction', { chainIndex: '56', tokenContractAddress: quote.fromToken.address, approveAmount: quote.amountInRaw });
       spender = response.dexContractAddress;
     }
-    if (!(this.config('bnb').routerAllowlist ?? DEFAULT_BNB).some(a => same('bnb', a, spender))) throw new AdapterError('授权 spender 不在白名单');
+    let normalized;
+    try { normalized = getAddress(spender); if (/^0x0{40}$/i.test(normalized)) throw new Error(); } catch { throw new AdapterError('授权 spender 地址无效'); }
+    if (!(this.config('bnb').routerAllowlist ?? DEFAULT_BNB).some(a => same('bnb', a, normalized))) throw new AdapterError('授权 spender 不在白名单');
     const encoded = await this.rpc.bnb.call('eth_call', [{ to: quote.fromToken.address, data: ERC20.encodeFunctionData('allowance', [quote.sender, spender]) }, 'latest']);
     const allowance = ERC20.decodeFunctionResult('allowance', encoded)[0];
-    if (allowance < BigInt(quote.amountInRaw)) throw new AdapterError(`APPROVAL_REQUIRED：请先通过钱包向已核对的 spender ${spender} 授权至少本笔数量 ${quote.amountInRaw}（建议仅授权所需额度）；本程序不会隐式发送授权交易`);
+    return { chain: 'bnb', tokenAddress: getAddress(quote.fromToken.address), spender: normalized, owner: getAddress(quote.sender), requiredRaw: quote.amountInRaw, currentRaw: allowance.toString(), sufficient: allowance >= BigInt(quote.amountInRaw) };
+  }
+  async assertAllowance(quote) {
+    const requirement = await this.allowanceRequirement(quote);
+    if (!requirement.sufficient) throw new AdapterError(`APPROVAL_REQUIRED：请先通过钱包向已核对的 spender ${requirement.spender} 授权至少本笔数量 ${quote.amountInRaw}（建议仅授权所需额度）；本程序不会隐式发送授权交易`);
+    return requirement;
   }
   async receipt(chain, hash, { owner, token, direction = 'in', minRaw = '1' } = {}) {
     const deadline = Date.now() + this.confirmationTimeoutMs;

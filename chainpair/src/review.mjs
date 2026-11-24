@@ -4,7 +4,7 @@ const TIME_ZONE = 'Asia/Shanghai';
 const OFFSET_MS = 8 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MODES = new Set(['demo', 'live']);
-const TYPES = new Set(['arbitrage', 'manual', 'rebalance']);
+const TYPES = new Set(['arbitrage', 'manual', 'rebalance', 'approval']);
 const fail = message => Object.assign(new Error(message), { safe: true });
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 const sum = values => values.length ? values.reduce((total, value) => total.plus(value), new Decimal(0)).toNumber() : null;
@@ -63,13 +63,14 @@ export function buildDailyReview(trades, { day, mode = 'demo', now = Date.now() 
   const observations = [{ code: 'READ_ONLY', text: '本地复盘只生成统计与检查建议，不修改风控、发布策略或触发交易。' }];
   if (!valid.length) observations.push({ code: 'NO_VERIFIED_RESULTS', text: '该日期没有通过完整收支字段核对的完成记录，实际净收益尚未验证。' });
   if (inventoryRows.length) observations.push({ code: 'INVENTORY_CASH_SPREAD', text: `${inventoryRows.length} 笔库存交易只核对两腿现金流价差，单独统计；两链库存尚未回补，未来补库成本未计入，不合入闭环净收益。` });
+  if (closedRows.some(row => row.trade.type === 'approval')) observations.push({ code: 'APPROVAL_COST', text: '已归档的有限授权费用作为独立支出计入本日收支，不计作套利盈利成功样本或套利执行次数。' });
   if (pending.length) observations.push({ code: 'MANUAL_REVIEW_REQUIRED', text: `当前仍有 ${pending.length} 笔该模式的交易待人工核对，请检查链上回执与实际余额。` });
   if (completed.length > valid.length) observations.push({ code: 'INCOMPLETE_ACCOUNTING', text: `${completed.length - valid.length} 笔完成记录存在费用缺失或收支不一致，未计入已复核净收益。` });
   if (closedRows.length > paired.length) observations.push({ code: 'MISSING_ESTIMATE', text: `${closedRows.length - paired.length} 笔闭环已复核记录缺少对应估算，未计入估实差异比较。` });
   if (differenceUsd !== null && differenceUsd < -0.00000001) observations.push({ code: 'ESTIMATE_OVERSTATED', text: '实际净收益低于对应估算，请离线检查报价时效、跨链到账折损及费用；报告不会自动调整参数。' });
   if (actualProfitUsd !== null && actualProfitUsd < 0) observations.push({ code: 'NEGATIVE_REALIZED_RESULT', text: '该日期已复核净收益为负，请先核查成交与成本记录，再由用户决定后续操作。' });
   observations.push({ code: 'COST_COVERAGE', text: '费用仅覆盖本工具归档的交易；外部钱包手动授权、充值等额外支出需另行核对。' });
-  const byType = ['arbitrage', 'manual', 'rebalance', 'unknown'].map(type => {
+  const byType = ['arbitrage', 'manual', 'rebalance', 'approval', 'unknown'].map(type => {
     const rows = closedRows.filter(row => (TYPES.has(row.trade.type) ? row.trade.type : 'unknown') === type);
     return { type, count: rows.length, profitUsd: sum(rows.map(row => row.actual.profitUsd)) };
   });

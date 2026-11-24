@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Wallet, keccak256 } from 'ethers';
+import { Interface, Wallet, keccak256 } from 'ethers';
 import { Keypair, PublicKey, SystemProgram, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import bs58 from 'bs58';
 import { LiveAdapter, verifyPublishedEvmTransaction, validateBrowserSolanaSignature } from '../src/adapters/live.mjs';
@@ -10,6 +10,8 @@ const bnbTarget = '0x2222222222222222222222222222222222222222';
 const tokenA = '0x3333333333333333333333333333333333333333';
 const tokenB = '0x4444444444444444444444444444444444444444';
 const hash = '0x' + 'ab'.repeat(32);
+const reviewedRouter = new Interface(['function dagSwapTo(uint256 orderId,address receiver,(uint256 fromToken,address toToken,uint256 fromTokenAmount,uint256 minReturnAmount,uint256 deadLine) baseRequest,(address[] mixAdapters,address[] assetTo,uint256[] rawData,bytes[] extraData,uint256 fromToken)[] paths) payable returns(uint256)']);
+const evmData = receiver => reviewedRouter.encodeFunctionData('dagSwapTo', [1n, receiver, [BigInt(tokenA), tokenB, 500n, 490n, BigInt(Math.floor(Date.now() / 1000) + 600)], []]);
 const config = { chains: { bnb: { rpcs: [], nativeUsd: 600 }, solana: { rpcs: [], nativeUsd: 150 } }, risk: { reserveBnb: .003, reserveSol: .03, maxBnbGas: .001, maxSolFee: .01 } };
 const evmQuote = () => ({ id: 'browser-evm-quote', kind: 'swap', fromChain: 'bnb', toChain: 'bnb', sender: bnbOwner, recipient: bnbOwner,
   fromToken: { address: tokenA, decimals: 18 }, toToken: { address: tokenB, decimals: 18 }, amountInRaw: '500', amountOutRaw: '495', minOutRaw: '490',
@@ -17,6 +19,7 @@ const evmQuote = () => ({ id: 'browser-evm-quote', kind: 'swap', fromChain: 'bnb
 function evmFixture({ published, response, brokerError, mode = 'browser', pendingTimeout = 15000 } = {}) {
   const calls = []; const localWallet = Wallet.createRandom();
   const quote = evmQuote(); if (mode === 'private') quote.sender = quote.recipient = localWallet.address;
+  quote.tx.data = evmData(quote.sender);
   const adapter = new LiveAdapter({ getConfig: () => config, browserTransactionTimeoutMs: pendingTimeout,
     vault: { publicStatus: () => ({ bnb: { address: quote.sender, mode, canSign: true }, solana: {} }), signer: () => { calls.push('local-signer'); if (mode === 'browser') throw new Error('browser must never request private signer'); return localWallet; } },
     browserWallets: { request: async (chain, request) => { calls.push('broker'); assert.equal(chain, 'bnb'); assert.equal(request.kind, 'evmSend'); assert.equal(request.quoteId, quote.id); assert.equal(request.payload.transaction.chainId, '0x38'); if (brokerError) throw brokerError; return response ?? { hash }; } }
@@ -27,7 +30,8 @@ function evmFixture({ published, response, brokerError, mode = 'browser', pendin
   adapter.assertAllowance = async () => { calls.push('allowance'); };
   adapter.rpc.bnb.call = async (method, params) => {
     calls.push(method);
-    if (method === 'eth_call') return '0x';
+    if (method === 'eth_call') return reviewedRouter.encodeFunctionResult('dagSwapTo', [495n]);
+    if (method === 'eth_estimateGas') { assert.equal(params[0].gas, '0x186a0'); return '0x15f90'; }
     if (method === 'eth_getTransactionCount') return '0x0';
     if (method === 'eth_sendRawTransaction') return keccak256(params[0]);
     if (method === 'eth_getTransactionByHash') return published === undefined ? { hash, from: quote.sender, to: bnbTarget, input: quote.tx.data, value: '0x0', gas: '0x186a0', gasPrice: '0x3b9aca00', chainId: '0x38' } : published;
@@ -40,7 +44,7 @@ test('browser EVM signing runs all preflight checks, journals returned hash, and
   const { adapter, quote, calls } = evmFixture();
   const result = await adapter.submit(quote, { onSubmitted: async submitted => { calls.push('journal'); assert.equal(submitted.hash, hash); assert.equal(submitted.signer, 'browser'); } });
   assert.equal(result.hash, hash);
-  assert.deepEqual(calls, ['validate-intent', 'allowance', 'eth_call', 'broker', 'journal', 'eth_getTransactionByHash']);
+  assert.deepEqual(calls, ['validate-intent', 'allowance', 'eth_call', 'eth_estimateGas', 'broker', 'journal', 'eth_getTransactionByHash']);
   await assert.rejects(adapter.submit(quote), /禁止重复发送/);
   assert.equal(calls.filter(x => x === 'broker').length, 1);
 });
@@ -226,4 +230,54 @@ test('local Solana expiry during signed simulation prevents journaling and broad
   await assert.rejects(adapter.submit(quote, { onSubmitted: async () => { calls.push('journal'); } }), /报价已过期/);
   assert.equal(calls.includes('simulateTransaction'), true); assert.equal(calls.includes('journal'), false);
   assert.equal(calls.includes('sendTransaction'), false);
+});
+
+test('BNB gas demand above the frozen quote blocks before private key access or a wallet popup', async () => {
+  for (const mode of ['private', 'browser']) {
+    const { adapter, quote, calls } = evmFixture({ mode }), original = adapter.rpc.bnb.call;
+    adapter.rpc.bnb.call = async (...args) => args[0] === 'eth_estimateGas' ? '0x186a1' : original(...args);
+    await assert.rejects(adapter.submit(quote), /Gas.*上限/);
+    assert(!calls.includes('local-signer')); assert(!calls.includes('broker')); assert(!calls.includes('eth_sendRawTransaction'));
+  }
+});
+
+test('a signed Solana simulation with costs above the frozen estimate stops despite remaining below the global cap', async () => {
+  const { adapter, quote, calls } = solFixture({ mode: 'private' }), original = adapter.rpc.solana.call;
+  adapter.rpc.solana.call = async (...args) => { const result = await original(...args); if (args[0] === 'simulateTransaction') result.value.accounts[0].lamports = 999970000; return result; };
+  await assert.rejects(adapter.submit(quote, { onSubmitted: async () => { calls.push('journal'); } }), /高于冻结报价费用/);
+  assert(!calls.includes('journal')); assert(!calls.includes('sendTransaction'));
+});
+
+test('signed Solana simulation rejects an unsafe native balance without rounding it into a permitted debit', async () => {
+  const { adapter, quote, calls } = solFixture({ mode: 'private' }), original = adapter.rpc.solana.call;
+  adapter.rpc.solana.call = async (...args) => { const result = await original(...args); if (args[0] === 'simulateTransaction') result.value.accounts[0].lamports = Number.MAX_SAFE_INTEGER + 1; return result; };
+  await assert.rejects(adapter.submit(quote), /可核验钱包余额/);
+  assert(!calls.includes('sendTransaction'));
+});
+
+test('signed Solana simulation requires an explicit null error result before journaling or broadcasting', async () => {
+  for (const err of [undefined, false]) {
+    const { adapter, quote, calls } = solFixture({ mode: 'private' }), original = adapter.rpc.solana.call;
+    adapter.rpc.solana.call = async (...args) => { const result = await original(...args); if (args[0] === 'simulateTransaction') { if (err === undefined) delete result.value.err; else result.value.err = err; } return result; };
+    await assert.rejects(adapter.submit(quote, { onSubmitted: async () => { calls.push('journal'); } }), /已签名模拟失败或缺少完整账户回执/);
+    assert(!calls.includes('journal')); assert(!calls.includes('sendTransaction'));
+  }
+});
+
+test('signed Solana simulation rejects missing or malformed account arrays', async () => {
+  for (const accounts of [undefined, {}]) {
+    const { adapter, quote, calls } = solFixture({ mode: 'private' }), original = adapter.rpc.solana.call;
+    adapter.rpc.solana.call = async (...args) => { const result = await original(...args); if (args[0] === 'simulateTransaction') result.value.accounts = accounts; return result; };
+    await assert.rejects(adapter.submit(quote), /完整账户回执/);
+    assert(!calls.includes('sendTransaction'));
+  }
+});
+
+test('signed Solana simulation requires exactly the requested native and token account results', async () => {
+  for (const count of [1, 3]) {
+    const { adapter, quote, calls } = solFixture({ mode: 'private' }), original = adapter.rpc.solana.call;
+    adapter.rpc.solana.call = async (...args) => { const result = await original(...args); if (args[0] === 'simulateTransaction') result.value.accounts = count === 1 ? result.value.accounts.slice(0, 1) : [...result.value.accounts, null]; return result; };
+    await assert.rejects(adapter.submit(quote), /完整账户回执/);
+    assert(!calls.includes('sendTransaction'));
+  }
 });

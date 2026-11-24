@@ -18,6 +18,17 @@ class TestAdapter extends DemoAdapter {
   async quoteSwap(input) { this.calls.push({ method: 'swap', ...input }); if (this.options.quoteDelay) await pause(this.options.quoteDelay); const q = await super.quoteSwap(input); this.options.changeQuote?.(q, stage(q), this.sent.length); return q; }
   async quoteTokenBridge(input) { if (this.options.bridgeDelay) await pause(this.options.bridgeDelay); this.calls.push({ method: 'bridge', ...input }); const q = await super.quoteTokenBridge(input); if (this.options.rebuiltBridgeGas && this.sent.length) q.bnbGas = this.options.rebuiltBridgeGas; this.options.changeQuote?.(q, 'BRIDGE', this.sent.length); return q; }
   async balances(chain) { if (this.options.funds) return { tokenRaw: '99999999999999999999999999', ...this.options.funds[chain] }; return super.balances(chain); }
+  async preflightSwap(quote) {
+    this.calls.push({ method: 'preflight', chain: quote.fromChain, quoteId: quote.id });
+    if (this.options.preflightFailureChain === quote.fromChain) throw safe('离线预检故障：卖出模拟未通过');
+    this.options.afterPreflight?.(quote);
+    return { verified: true, readOnly: true, chain: quote.fromChain, quoteId: quote.id, checkedAt: new Date().toISOString(), expiresAt: quote.expiresAt };
+  }
+  async allowanceRequirement(quote) {
+    this.calls.push({ method: 'allowance', amountRaw: quote.amountInRaw });
+    const currentRaw = this.options.expectedAllowanceRaw || '99999999999999999999999999';
+    return { chain: 'bnb', tokenAddress: quote.fromToken.address, owner: quote.sender, requiredRaw: quote.amountInRaw, currentRaw, sufficient: BigInt(currentRaw) >= BigInt(quote.amountInRaw) };
+  }
   async submit(quote, { onSubmitted } = {}) {
     const intent = this.store.getQuote(quote.id);
     assert.ok(intent?.tradeId, 'the submitted quote must already identify its durable trade');
@@ -288,6 +299,68 @@ function useMockLiveWallets(engine, adapter, mode = 'private') {
     adapter[method] = async input => { const quote = await original(input); return { ...quote, sender: addresses[quote.fromChain], recipient: addresses[quote.toChain] }; };
   }
 }
+
+function useMockLiveInventory(engine, adapter) {
+  useMockLiveWallets(engine, adapter);
+  adapter.options.funds = { bnb: { stableUsd: 30, nativeBalance: .025 }, solana: { stableUsd: 30, nativeBalance: .3, tokenRaw: '1000000000000' } };
+  engine.config.executionMode = 'inventory';
+  engine.config.inventory = { assetId: 'manual:preflight-live', mappingConfirmed: true, mappingEvidence: 'Offline 1:1 fixture only', scanApprovedAssets: false };
+}
+
+test('live inventory checks both unsigned swaps before the first durable buy intent', async t => {
+  const { engine, adapter, store } = await setup(t);
+  useMockLiveInventory(engine, adapter);
+  const original = adapter.preflightSwap.bind(adapter);
+  adapter.preflightSwap = async quote => {
+    assert.equal(adapter.sent.length, 0);
+    assert.equal(store.allTrades().length, 0, 'failed simulation must not leave a buy intent');
+    return original(quote);
+  };
+  const trade = await engine.execute();
+  assert.equal(trade.status, 'COMPLETED');
+  assert.deepEqual(adapter.calls.filter(call => call.method === 'preflight').map(call => call.chain).sort(), ['bnb', 'solana']);
+  assert.equal(trade.estimate.initialLivePreflight.length, 2);
+  assert.deepEqual(adapter.sent.map(sent => stage(sent.quote)), ['BUY', 'SELL']);
+});
+
+test('a failed sell simulation blocks live buy without consuming funds or execution quota', async t => {
+  const { engine, adapter, store } = await setup(t, { preflightFailureChain: 'solana' });
+  useMockLiveInventory(engine, adapter);
+  await assert.rejects(engine.execute(), /买入前未签名成交模拟未通过/);
+  assert.equal(adapter.sent.length, 0); assert.equal(store.allTrades().length, 0);
+  assert.equal(store.stats('live').executions, 0);
+});
+
+test('expired or mismatched preflight evidence cannot authorize a live buy', async t => {
+  const { engine, adapter, store } = await setup(t);
+  useMockLiveInventory(engine, adapter);
+  adapter.preflightSwap = async quote => ({ verified: true, readOnly: true, chain: quote.fromChain, quoteId: 'different-quote', checkedAt: new Date().toISOString(), expiresAt: quote.expiresAt });
+  await assert.rejects(engine.execute(), /准确交易或有效期证据/);
+  assert.equal(adapter.sent.length, 0); assert.equal(store.allTrades().length, 0);
+});
+
+test('wallet revision changes during unsigned checks invalidate the complete buy plan', async t => {
+  const { engine, adapter } = await setup(t, { afterPreflight: () => engine.walletChanged('bnb') });
+  useMockLiveInventory(engine, adapter);
+  await assert.rejects(engine.execute(), /钱包或配置已变化/);
+  assert.equal(adapter.sent.length, 0);
+});
+
+test('BNB sell allowance covers expected actual buy output rather than only the conservative minimum', async t => {
+  const { engine, adapter, store } = await setup(t);
+  useMockLiveInventory(engine, adapter); adapter.prices = { bnb: .0131, solana: .0124 };
+  await engine.loadMarketBalances(); await engine.buildOpportunity();
+  const minimum = engine.plan.sell.amountInRaw, expected = engine.plan.inventoryReserveRaw;
+  assert(BigInt(expected) > BigInt(minimum));
+  adapter.options.expectedAllowanceRaw = minimum;
+  await assert.rejects(engine.execute(), /授权不足当前买入预期到账量/);
+  assert.equal(adapter.sent.length, 0); assert.equal(store.stats('live').executions, 0);
+  adapter.options.expectedAllowanceRaw = expected;
+  const trade = await engine.execute();
+  assert.equal(trade.status, 'COMPLETED');
+  assert.equal(trade.estimate.expectedSellApproval.requiredRaw, expected);
+  assert.equal(adapter.sent[1].quote.amountInRaw, expected, 'normal confirmed buy output fits the reviewed finite amount');
+});
 
 test('verification-only engine accepts public addresses for quality checks but every execution entry rejects', async t => {
   const { engine, adapter, store } = await setup(t, { verificationOnly: true });

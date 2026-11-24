@@ -330,6 +330,31 @@ export class Engine {
       await this.buildOpportunity({ ignoreBusy: true });
       if (!this.opportunity?.executable || !this.plan) throw safeError((this.opportunity?.reasons || ['暂无可执行报价']).join('；'));
       const plan = this.plan; const estimate = structuredClone(this.opportunity);
+      if (this.config.mode === 'live') {
+        const revision = this.configRevision;
+        const previews = this.config.executionMode === 'inventory' ? [plan.buy, plan.sell] : [plan.buy];
+        if (typeof this.adapter.preflightSwap !== 'function') throw safeError('实盘适配器缺少未签名成交模拟，禁止买入');
+        const checked = await Promise.allSettled(previews.map(async quote => {
+          const result = await this.adapter.preflightSwap(quote);
+          const at = Date.parse(result?.checkedAt), expiry = Date.parse(result?.expiresAt);
+          if (result?.verified !== true || result.readOnly !== true || result.quoteId !== quote.id || result.chain !== quote.fromChain || !Number.isFinite(at) || at > Date.now() + 1000 || Date.now() - at > this.config.risk.maxQuoteAgeMs || !Number.isFinite(expiry) || expiry > Date.parse(quote.expiresAt) || expiry <= Date.now()) throw safeError('未签名成交模拟缺少准确交易或有效期证据，禁止买入');
+          return { chain: result.chain, quoteId: quote.id, checkedAt: result.checkedAt, expiresAt: result.expiresAt,
+            verified: true, readOnly: true, onChainMinimumDecoded: result.onChainMinimumDecoded === true };
+        }));
+        if (revision !== this.configRevision) throw safeError('模拟期间钱包或配置已变化，请重新报价');
+        this.executionGuard?.();
+        for (const result of checked) if (result.status === 'rejected') throw safeError(`买入前未签名成交模拟未通过：${this.errorText(result.reason)}`);
+        if (this.config.executionMode === 'inventory' && estimate.sellChain === 'bnb') {
+          if (typeof this.adapter.allowanceRequirement !== 'function') throw safeError('缺少 BNB 预期卖出数量授权检查，禁止买入');
+          const requirement = await this.adapter.allowanceRequirement({ ...plan.sell, amountInRaw: plan.inventoryReserveRaw });
+          if (requirement?.chain !== 'bnb' || requirement.requiredRaw !== plan.inventoryReserveRaw || String(requirement.tokenAddress).toLowerCase() !== plan.sell.fromToken.address.toLowerCase() || String(requirement.owner).toLowerCase() !== plan.sell.sender.toLowerCase() || typeof requirement.currentRaw !== 'string' || !/^\d{1,78}$/.test(requirement.currentRaw) || BigInt(requirement.currentRaw) < BigInt(plan.inventoryReserveRaw) || requirement.sufficient !== true) throw safeError('BNB 卖出授权不足当前买入预期到账量，禁止买入；请重新预检并审阅有限额度');
+          if (revision !== this.configRevision) throw safeError('授权检查期间钱包或配置已变化，请重新报价');
+          this.executionGuard?.();
+          estimate.expectedSellApproval = { chain: 'bnb', requiredRaw: plan.inventoryReserveRaw, basis: 'expected-buy-output' };
+        }
+        this.assertPlanQuality(plan.bridge ? [plan.buy, plan.bridge, plan.sell] : [plan.buy, plan.sell]);
+        estimate.initialLivePreflight = checked.map(result => result.value);
+      }
       trade = this.newTrade('arbitrage', { amountUsd: estimate.amountUsd, buyChain: estimate.buyChain, sellChain: estimate.sellChain, executionMode: this.config.executionMode || 'bridge', assetId: this.config.inventory?.assetId || '', estimate });
       this.activeTradeId = trade.id;
       const stats = this.store.stats();

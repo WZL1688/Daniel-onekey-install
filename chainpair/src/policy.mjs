@@ -6,7 +6,7 @@ const CHAINS = ['bnb', 'solana'];
 const MAX_RAW = { bnb: (1n << 256n) - 1n, solana: (1n << 64n) - 1n };
 const RISK_FIELDS = ['amountUsd', 'minProfitUsd', 'maxSlippageBps', 'maxPriceImpactBps', 'maxBnbGas', 'maxSolFee', 'reserveBnb', 'reserveSol', 'maxExecutions', 'maxCumulativeUsd', 'maxQuoteAgeMs'];
 const REBALANCE_FIELDS = ['enabled', 'triggerUsd', 'targetShare', 'cooldownMs', 'maxWearUsd', 'maxWearBps'];
-const CHAIN_FIELDS = ['tokenAddress', 'stableAddress', 'poolAddress', 'tokenDecimals', 'stableDecimals', 'confirmations', 'nativeUsd'];
+const CHAIN_FIELDS = ['tokenAddress', 'stableAddress', 'poolAddress', 'routingMode', 'tokenDecimals', 'stableDecimals', 'confirmations', 'nativeUsd'];
 const fields = (source, names) => Object.fromEntries(names.map(name => [name, source?.[name]]));
 const sameAddress = (chain, left, right) => typeof left === 'string' && typeof right === 'string' && (chain === 'bnb' ? left.toLowerCase() === right.toLowerCase() : left === right);
 const canonical = value => Array.isArray(value) ? `[${value.map(canonical).join(',')}]` : value && typeof value === 'object' ? `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}` : JSON.stringify(value);

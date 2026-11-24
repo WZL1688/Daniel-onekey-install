@@ -92,13 +92,14 @@ export class Store {
   stats(mode=this.config?.mode||'demo'){
     const trades=this.db.prepare('SELECT document FROM trades').all().map((r)=>JSON.parse(r.document)).filter(t=>(t.mode||'demo')===mode),ids=new Set(trades.map(t=>t.id));
     const reservations=this.db.prepare('SELECT trade_id,amount_usd FROM reservations').all().filter(r=>ids.has(r.trade_id)),volumeUsd=reservations.reduce((sum,r)=>sum+r.amount_usd,0);
-    let profitUsd=0,completed=0,inventoryCashSpreadUsd=0,inventoryCompleted=0;
+    let profitUsd=0,completed=0,inventoryCashSpreadUsd=0,inventoryCompleted=0,approvalGasUsd=0,approvalCompleted=0;
     for(const t of trades)if(['completed','COMPLETED'].includes(t.status||t.state)){
+      if(t.type==='approval'){approvalCompleted++;if(Number.isFinite(t.actual?.gasUsd)&&t.actual.gasUsd>=0)approvalGasUsd+=t.actual.gasUsd;continue;}
       completed++;const p=t.actualProfitUsd??t.actual?.profitUsd??t.reconciliation?.actualProfitUsd??t.result?.actualProfitUsd;
       if(t.executionMode==='inventory'||t.actual?.closedInventory===false){inventoryCompleted++;if(Number.isFinite(p))inventoryCashSpreadUsd+=p;}
       else if(Number.isFinite(p))profitUsd+=p;
     }
-    return {mode,executions:reservations.length,count:reservations.length,volumeUsd,cumulativeUsd:volumeUsd,completed,profitUsd,inventoryCashSpreadUsd,inventoryCompleted};
+    return {mode,executions:reservations.length,count:reservations.length,volumeUsd,cumulativeUsd:volumeUsd,completed,profitUsd,inventoryCashSpreadUsd,inventoryCompleted,approvalGasUsd,approvalCompleted};
   }
   saveQuote(quote){const out={...scrub(quote),id:quote.id||randomUUID(),createdAt:quote.createdAt||new Date().toISOString()};this.db.prepare('INSERT INTO quotes(id,created_at,document) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET document=excluded.document').run(out.id,out.createdAt,json(out));return out;}
   getQuote(id){const row=this.db.prepare('SELECT document FROM quotes WHERE id=?').get(id);return row?JSON.parse(row.document):null;}

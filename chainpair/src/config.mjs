@@ -2,8 +2,8 @@ export const DEFAULT_CONFIG = {
   mode: 'demo', executionMode: 'bridge', pollIntervalMs: 5000, quoteTtlMs: 15000,
   inventory: { assetId: '', mappingConfirmed: false, mappingEvidence: '', scanApprovedAssets: false },
   chains: {
-    bnb: { tokenAddress: '', stableAddress: '0x55d398326f99059fF775485246999027B3197955', poolAddress: '', tokenDecimals: 18, stableDecimals: 18, rpcs: ['https://bsc-dataseed.binance.org'], confirmations: 3, nativeUsd: 600, routerAllowlist: [] },
-    solana: { tokenAddress: '', stableAddress: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', poolAddress: '', tokenDecimals: 9, stableDecimals: 6, rpcs: ['https://api.mainnet-beta.solana.com'], confirmations: 1, nativeUsd: 150, programAllowlist: [] },
+    bnb: { tokenAddress: '', stableAddress: '0x55d398326f99059fF775485246999027B3197955', poolAddress: '', routingMode: 'pinned', tokenDecimals: 18, stableDecimals: 18, rpcs: ['https://bsc-dataseed.binance.org'], confirmations: 3, nativeUsd: 600, routerAllowlist: [] },
+    solana: { tokenAddress: '', stableAddress: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', poolAddress: '', routingMode: 'pinned', tokenDecimals: 9, stableDecimals: 6, rpcs: ['https://api.mainnet-beta.solana.com'], confirmations: 1, nativeUsd: 150, programAllowlist: [] },
   },
   risk: { amountUsd: 5, minProfitUsd: 0.03, maxSlippageBps: 50, maxPriceImpactBps: 100, maxBnbGas: 0.001, maxSolFee: 0.01, reserveBnb: 0.003, reserveSol: 0.03, maxExecutions: 10, maxCumulativeUsd: 50, maxQuoteAgeMs: 15000 },
   rebalance: { enabled: false, triggerUsd: 5, targetShare: 0.6, cooldownMs: 1800000, maxWearUsd: 0.3, maxWearBps: 100 },
@@ -40,6 +40,8 @@ export function validateConfig(input) {
   for (const chain of ['bnb','solana']) {
     const c = { ...config.chains[chain], ...(input.chains?.[chain] || {}) };
     const out = config.chains[chain];
+    if (!['pinned', 'aggregator'].includes(c.routingMode)) fail(`${chain}.routingMode`);
+    out.routingMode = c.routingMode;
     for (const name of ['tokenAddress','stableAddress','poolAddress']) out[name] = address(c[name],chain,`${chain}.${name}`,name !== 'stableAddress');
     for (const name of ['tokenDecimals','stableDecimals']) out[name] = num(c[name],0,36,`${chain}.${name}`,true);
     out.confirmations = num(c.confirmations,1,100,`${chain}.confirmations`,true);
