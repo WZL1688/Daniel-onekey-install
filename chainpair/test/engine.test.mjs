@@ -15,8 +15,8 @@ const stage = q => q.kind === 'bridge' ? 'BRIDGE' : q.fromToken.kind === 'stable
 class TestAdapter extends DemoAdapter {
   constructor(args, options = {}) { super(args); this.options = options; this.calls = []; this.sent = []; this.receipts = []; }
   async market(chain) { if (this.options.marketDelay) await pause(this.options.marketDelay); return super.market(chain); }
-  async quoteSwap(input) { this.calls.push({ method: 'swap', ...input }); if (this.options.quoteDelay) await pause(this.options.quoteDelay); return super.quoteSwap(input); }
-  async quoteTokenBridge(input) { if (this.options.bridgeDelay) await pause(this.options.bridgeDelay); this.calls.push({ method: 'bridge', ...input }); const q = await super.quoteTokenBridge(input); if (this.options.rebuiltBridgeGas && this.sent.length) q.bnbGas = this.options.rebuiltBridgeGas; return q; }
+  async quoteSwap(input) { this.calls.push({ method: 'swap', ...input }); if (this.options.quoteDelay) await pause(this.options.quoteDelay); const q = await super.quoteSwap(input); this.options.changeQuote?.(q, stage(q), this.sent.length); return q; }
+  async quoteTokenBridge(input) { if (this.options.bridgeDelay) await pause(this.options.bridgeDelay); this.calls.push({ method: 'bridge', ...input }); const q = await super.quoteTokenBridge(input); if (this.options.rebuiltBridgeGas && this.sent.length) q.bnbGas = this.options.rebuiltBridgeGas; this.options.changeQuote?.(q, 'BRIDGE', this.sent.length); return q; }
   async balances(chain) { if (this.options.funds) return { tokenRaw: '99999999999999999999999999', ...this.options.funds[chain] }; return super.balances(chain); }
   async submit(quote, { onSubmitted } = {}) {
     const intent = this.store.getQuote(quote.id);
@@ -44,7 +44,7 @@ async function setup(t, options = {}, mutate) {
   mutate?.(config); store.setConfig(config);
   const vault = { publicStatus: () => ({ bnb: { mode: 'none' }, solana: { mode: 'none' }, okxConfigured: false }), getOkxCredentials: () => { throw Error('should not read secrets'); } };
   let adapter;
-  const engine = new Engine({ store, vault, adapterFactory: args => adapter = new TestAdapter(args, options) });
+  const engine = new Engine({ store, vault, verificationOnly: options.verificationOnly, adapterFactory: args => adapter = new TestAdapter(args, options) });
   await engine.init(); engine.stop();
   t.after(() => { engine.stop(); store.close(); rmSync(dir, { recursive: true, force: true }); });
   return { engine, store, adapter };
@@ -275,4 +275,142 @@ test('live mode accepts connected browser signers and blocks stale browser or re
   assert(engine.baseReasons().some(reason => /插件钱包未连接/.test(reason)));
   engine.vault.publicStatus = () => ({ bnb: { mode: 'readonly', unlocked: false, canSign: false }, solana: { mode: 'browser', unlocked: true, canSign: true }, okxConfigured: true, locked: false });
   assert(engine.baseReasons().some(reason => /只读/.test(reason)));
+});
+
+function useMockLiveWallets(engine, adapter, mode = 'private') {
+  const addresses = { bnb: '0x1111111111111111111111111111111111111111', solana: '11111111111111111111111111111111' };
+  engine.config.mode = 'live';
+  engine.config.chains.bnb.tokenAddress = '0x2222222222222222222222222222222222222222';
+  engine.config.chains.solana.tokenAddress = 'So11111111111111111111111111111111111111112';
+  engine.vault.publicStatus = () => ({ ...Object.fromEntries(Object.entries(addresses).map(([chain, address]) => [chain, { address, mode, unlocked: mode !== 'readonly', canSign: mode !== 'readonly' }])), okxConfigured: true, locked: false });
+  for (const method of ['quoteSwap', 'quoteTokenBridge']) {
+    const original = adapter[method].bind(adapter);
+    adapter[method] = async input => { const quote = await original(input); return { ...quote, sender: addresses[quote.fromChain], recipient: addresses[quote.toChain] }; };
+  }
+}
+
+test('verification-only engine accepts public addresses for quality checks but every execution entry rejects', async t => {
+  const { engine, adapter, store } = await setup(t, { verificationOnly: true });
+  useMockLiveWallets(engine, adapter, 'readonly');
+  await engine.loadMarketBalances(); await engine.buildOpportunity();
+  assert.equal(engine.opportunity.qualityPassed, true, engine.opportunity.reasons.join('；'));
+  assert.equal(engine.opportunity.executable, false);
+  await assert.rejects(engine.execute(), /只读复核禁止/);
+  await assert.rejects(engine.runLeg({}, 'BUY', {}), /只读复核禁止/);
+  await assert.rejects(engine.executeBridge({ quoteId: 'unused' }), /只读复核禁止/);
+  assert.equal(adapter.sent.length, 0); assert.equal(store.allTrades().length, 0);
+  engine.vault.publicStatus = () => ({ bnb: { address: 'public-only' }, solana: {}, okxConfigured: false, locked: true });
+  assert(engine.baseReasons().some(reason => /solana 未导入/.test(reason)));
+  assert(engine.baseReasons().some(reason => /OKX API/.test(reason)));
+});
+
+test('live TTL below the fixed three-second minimum safely blocks instead of relaxing risk settings', async t => {
+  const { engine, adapter, store } = await setup(t);
+  useMockLiveWallets(engine, adapter); engine.config.quoteTtlMs = 2000;
+  await assert.rejects(engine.execute(), /剩余有效期不足 3 秒/);
+  assert.equal(engine.config.quoteTtlMs, 2000); assert.equal(adapter.sent.length, 0);
+  assert.equal(store.stats().executions, 0);
+});
+
+test('BUY rechecks the entire live plan after balance reads, including a sell quote nearing expiry', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const { engine, adapter, store } = await setup(t);
+  useMockLiveWallets(engine, adapter);
+  adapter.options.changeQuote = (q, name) => { if (name === 'SELL') q.expiresAt = new Date(Date.now() + 3500).toISOString(); };
+  const original = adapter.balances.bind(adapter); let reads = 0;
+  adapter.balances = async chain => { const balance = await original(chain); if (++reads === 3) t.mock.timers.tick(600); return balance; };
+  await assert.rejects(engine.execute(), /剩余有效期不足 3 秒/);
+  assert.equal(adapter.sent.length, 0, 'a fresh BUY alone cannot justify submitting an aging whole plan');
+  assert.equal(store.allTrades()[0].status, 'NEEDS_REVIEW');
+});
+
+test('BUY rechecks whole-plan net profit after asynchronous balance reads', async t => {
+  const { engine, adapter } = await setup(t);
+  const original = adapter.balances.bind(adapter); let reads = 0;
+  adapter.balances = async chain => { const balance = await original(chain); if (++reads === 3) engine.plan.sell.feeUsd = 10; return balance; };
+  await assert.rejects(engine.execute(), /完整交易计划保守净收益/);
+  assert.equal(adapter.sent.length, 0);
+});
+
+for (const afterConfirmedLegs of [1, 2]) test(`bridge path stops when the sell price drops after ${afterConfirmedLegs} confirmed leg(s)`, async t => {
+  const { engine, adapter, store } = await setup(t);
+  adapter.options.changeQuote = (q, name, sent) => {
+    if (name === 'SELL' && sent >= afterConfirmedLegs) { q.amountOutRaw = new Decimal(q.amountOutRaw).div(2).floor().toFixed(0); q.minOutRaw = new Decimal(q.amountOutRaw).mul('.995').floor().toFixed(0); }
+  };
+  await assert.rejects(engine.execute(), /净收益未达到利润门槛/);
+  assert.deepEqual(adapter.sent.map(sent => stage(sent.quote)), afterConfirmedLegs === 1 ? ['BUY'] : ['BUY', 'BRIDGE']);
+  assert.equal(store.allTrades()[0].status, 'NEEDS_REVIEW');
+  assert.match(engine.pausedReason, /核对/);
+});
+
+test('pre-bridge profit recheck includes rent actually paid by the confirmed buy', async t => {
+  const { engine, adapter, store } = await setup(t);
+  const original = adapter.confirm.bind(adapter);
+  adapter.confirm = async sent => { const receipt = await original(sent); if (stage(sent.quote) === 'BUY') receipt.rentUsd = .3; return receipt; };
+  await assert.rejects(engine.execute(), /完整交易计划保守净收益/);
+  assert.deepEqual(adapter.sent.map(sent => stage(sent.quote)), ['BUY']);
+  const trade = store.allTrades()[0];
+  assert.equal(trade.legs[0].receipt.rentUsd, .3); assert.equal(trade.status, 'NEEDS_REVIEW');
+});
+
+test('live execution rejects nominally profitable plans that fail the shared pressure scenario', async t => {
+  const { engine, adapter, store } = await setup(t); useMockLiveWallets(engine, adapter);
+  await engine.loadMarketBalances(); await engine.buildOpportunity();
+  const { netProfitUsd, stressNetProfitUsd } = engine.opportunity;
+  assert(stressNetProfitUsd < netProfitUsd);
+  engine.config.risk.minProfitUsd = (netProfitUsd + stressNetProfitUsd) / 2;
+  await assert.rejects(engine.execute(), /压力场景/);
+  assert(engine.opportunity.netProfitUsd >= engine.config.risk.minProfitUsd);
+  assert(engine.opportunity.stressNetProfitUsd < engine.config.risk.minProfitUsd);
+  assert.equal(engine.opportunity.qualityPassed, false); assert.equal(engine.opportunity.executable, false);
+  assert.equal(adapter.sent.length, 0); assert.equal(store.stats().executions, 0);
+});
+
+test('shared live pressure formula leaves already-paid fees and rent at their actual values', async t => {
+  const { engine, adapter } = await setup(t); useMockLiveWallets(engine, adapter);
+  const sell = structuredClone(engine.plan.sell);
+  sell.amountOutRaw = '5220000'; sell.minOutRaw = '5200000'; sell.feeUsd = .04;
+  const trade = { legs: [{ receipt: { feeUsd: .08, rentUsd: .02, feesNative: { bnb: 0 } } }] };
+  const quality = engine.planQualityReasons([sell], { trade, spentUsd: 5 });
+  assert(Math.abs(quality.netProfitUsd - .06) < 1e-12);
+  assert(Math.abs(quality.stressNetProfitUsd - .024) < 1e-12, '5.2 * .995 - 5 - .1 - .04 * 1.25');
+  assert(quality.reasons.some(reason => /压力场景/.test(reason)));
+  assert.equal(quality.reasons.some(reason => /当前完整交易计划保守净收益/.test(reason)), false);
+});
+
+test('demo execution keeps its existing profit threshold without live pressure filtering', async t => {
+  const { engine, adapter } = await setup(t);
+  const quotes = [engine.plan.buy, engine.plan.bridge, engine.plan.sell], sell = engine.plan.sell;
+  const proceeds = new Decimal(sell.minOutRaw).div(new Decimal(10).pow(sell.toToken.decimals)).toNumber();
+  const stress = proceeds * .995 - engine.config.risk.amountUsd - quotes.reduce((sum, quote) => sum + quote.feeUsd, 0) * 1.25;
+  engine.config.risk.minProfitUsd = (engine.opportunity.netProfitUsd + stress) / 2;
+  assert.equal(engine.planQualityReasons(quotes).stressNetProfitUsd, null);
+  const trade = await engine.execute();
+  assert.equal(trade.status, 'COMPLETED'); assert.equal(adapter.sent.length, 3);
+  assert.equal('stressNetProfitUsd' in trade.estimate, false);
+});
+
+test('BUY balance-read recheck enforces pressure headroom even when ordinary net profit still passes', async t => {
+  const { engine, adapter } = await setup(t); useMockLiveWallets(engine, adapter);
+  await engine.loadMarketBalances(); await engine.buildOpportunity();
+  engine.config.risk.minProfitUsd = engine.opportunity.stressNetProfitUsd - .01;
+  const original = adapter.balances.bind(adapter); let reads = 0;
+  adapter.balances = async chain => { const balance = await original(chain); if (++reads === 3) engine.plan.sell.feeUsd += .02; return balance; };
+  await assert.rejects(engine.execute(), /压力场景/);
+  assert.equal(adapter.sent.length, 0);
+});
+
+for (const afterConfirmedLegs of [1, 2]) test(`bridge continuation rechecks live pressure after ${afterConfirmedLegs} confirmed leg(s)`, async t => {
+  const { engine, adapter, store } = await setup(t); useMockLiveWallets(engine, adapter);
+  let sellQuote, bridgeQuote;
+  adapter.options.changeQuote = (quote, name, sent) => {
+    if (name === 'BRIDGE' && sent) bridgeQuote = quote;
+    if (name === 'SELL' && sent >= afterConfirmedLegs) { quote.amountOutRaw = '5070000'; quote.minOutRaw = '5050000'; sellQuote = quote; }
+  };
+  await assert.rejects(engine.execute(), /压力场景/);
+  const paid = adapter.receipts.reduce((sum, receipt) => sum + receipt.feeUsd + receipt.rentUsd, 0);
+  const pending = sellQuote.feeUsd + (afterConfirmedLegs === 1 ? bridgeQuote.feeUsd : 0);
+  assert(5.05 - 5 - paid - pending >= engine.config.risk.minProfitUsd, 'ordinary net profit alone would still pass');
+  assert.deepEqual(adapter.sent.map(sent => stage(sent.quote)), afterConfirmedLegs === 1 ? ['BUY'] : ['BUY', 'BRIDGE']);
+  assert.equal(store.allTrades()[0].status, 'NEEDS_REVIEW');
 });

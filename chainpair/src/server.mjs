@@ -4,12 +4,14 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { normalizeWalletAddress } from './vault.mjs';
 import { APP_VERSION } from './version.mjs';
+import { buildPerformanceEvidence } from './performance.mjs';
+import { validId } from './opportunities/registry.mjs';
 
 const isEqual=(a,b)=>{if(typeof a!=='string'||typeof b!=='string')return false;const left=Buffer.from(a),right=Buffer.from(b);return left.length===right.length&&timingSafeEqual(left,right);};
 const safe=(message)=>Object.assign(new Error(message),{safe:true});
 const asyncRoute=(handler)=>(req,res,next)=>Promise.resolve(handler(req,res)).catch(next);
 const cookieValue=(raw,name)=>{for(const cookie of (raw||'').split(';')){const i=cookie.indexOf('=');if(cookie.slice(0,i).trim()===name)return cookie.slice(i+1).trim();}return '';};
-export function createApp({engine,store,vault,browserWallets,reviewService,radarService,opportunityService,inventoryCoordinator,publicDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../public')}={}){
+export function createApp({engine,store,vault,browserWallets,reviewService,radarService,opportunityService,inventoryCoordinator,qualityService,publicDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../public')}={}){
   const app=express();app.disable('x-powered-by');
   app.use((req,res,next)=>{res.setHeader('X-ChainPair-Version',APP_VERSION);next();});
   const busy=()=>engine.busy||engine.snapshot()?.engine?.busy;
@@ -37,6 +39,7 @@ export function createApp({engine,store,vault,browserWallets,reviewService,radar
   const radar=()=>{if(!radarService)throw safe('只读雷达服务未启用，请更新并重启程序');return radarService;};
   const opportunities=()=>{if(!opportunityService)throw safe('同币机会服务未启用，请更新并重启程序');return opportunityService;};
   const coordinator=()=>{if(!inventoryCoordinator)throw safe('库存执行服务未启用，请更新并重启程序');return inventoryCoordinator;};
+  const quality=()=>{if(!qualityService)throw safe('真实只读报价复核未启用，请更新并重启程序');return qualityService;};
   const registryChange=()=>{if(engine.busy||engine.configuring)throw safe('交易或配置更新进行中，暂不能变更同币清单');};
   const assetId=value=>{if(typeof value!=='string'||!value||value.length>160)throw safe('同币清单编号无效');return value;};
   const expectedMode=value=>{if(!['demo','live'].includes(value)||value!==engine.config.mode)throw safe('页面运行模式已变化，请刷新并核对模拟／实盘后重试');};
@@ -60,8 +63,22 @@ export function createApp({engine,store,vault,browserWallets,reviewService,radar
     if(!['GET','HEAD'].includes(req.method)&&!isEqual(req.headers['x-csrf-token'],csrfToken))return res.status(403).json({error:'请求校验失败，请刷新页面'});
     next();
   });
-  app.get('/api/state',asyncRoute(async(req,res)=>res.json({...(await engine.snapshot()),appVersion:APP_VERSION,features:{opportunities:Boolean(opportunityService)}})));
+  app.get('/api/state',asyncRoute(async(req,res)=>res.json({...(await engine.snapshot()),appVersion:APP_VERSION,features:{opportunities:Boolean(opportunityService),quality:Boolean(qualityService),performance:typeof store?.allTrades==='function'}})));
+  app.get('/api/performance',asyncRoute(async(req,res)=>{
+    if(typeof store?.allTrades!=='function')throw safe('实盘证据统计未启用，请更新并重启程序');
+    if(req.query.mode!==undefined&&req.query.mode!=='live')throw safe('成功率证据仅统计实盘，模拟记录不能作为盈利证据');
+    const executionMode=req.query.executionMode??engine.config.executionMode??'bridge';
+    if(typeof executionMode!=='string'||!['inventory','bridge'].includes(executionMode))throw safe('绩效执行模式无效');
+    const id=req.query.assetId===undefined?undefined:validId(req.query.assetId);
+    res.json(buildPerformanceEvidence(store.allTrades(),{mode:'live',executionMode,...(id?{assetId:id}:{})}));
+  }));
   app.get('/api/opportunities',asyncRoute(async(req,res)=>res.json({...opportunities().snapshot(),execution:coordinator().snapshot()})));
+  app.get('/api/opportunities/quality',asyncRoute(async(req,res)=>res.json(quality().snapshot())));
+  app.post('/api/opportunities/quality/enabled',asyncRoute(async(req,res)=>res.json(await quality().setEnabled(req.body?.enabled))));
+  app.post('/api/opportunities/quality/verify',asyncRoute(async(req,res)=>{
+    expectedMode(req.body?.expectedMode);const id=assetId(req.body?.id);assetRevision(id,req.body?.revision);
+    res.json(await quality().verify(id));
+  }));
   app.post('/api/opportunities/credentials',asyncRoute(async(req,res)=>{
     const service=opportunities();if(typeof service.credentialsChanged!=='function')throw safe('目录凭证服务未启用，请更新并重启程序');
     const result=vault.setCoinGeckoCredentials({apiKey:req.body?.apiKey,password:req.body?.password});
@@ -177,7 +194,7 @@ export function createApp({engine,store,vault,browserWallets,reviewService,radar
     await broker().resolve({clientId:body.clientId,requestId:body.requestId,result:body.result,error:body.error});res.json({ok:true});
   }));
   app.post('/api/wallets/unlock',asyncRoute(async(req,res)=>{await withWalletChange(async()=>{vault.unlock(req.body?.password);if(vault.publicStatus().coingeckoConfigured)await opportunityService?.credentialsChanged?.();scheduleWalletRefresh();});res.json(vault.publicStatus());}));
-  app.post('/api/wallets/lock',asyncRoute(async(req,res)=>{await withWalletChange(async()=>{vault.lock();await radarService?.credentialsChanged();await opportunityService?.credentialsChanged?.();});res.json(vault.publicStatus());}));
+  app.post('/api/wallets/lock',asyncRoute(async(req,res)=>{await withWalletChange(async()=>{vault.lock();scheduleWalletRefresh();await radarService?.credentialsChanged();await opportunityService?.credentialsChanged?.();});res.json(vault.publicStatus());}));
   app.post('/api/okx/credentials',asyncRoute(async(req,res)=>{let result;await withWalletChange(async()=>{result=vault.setOkxCredentials(req.body);scheduleWalletRefresh();});res.json(result);}));
   app.post('/api/bridge/quote',asyncRoute(async(req,res)=>{
     const {fromChain,toChain,amountUsd}=req.body||{};

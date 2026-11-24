@@ -75,7 +75,7 @@ export function createScannerBoard({ api, toast = () => {}, getState = () => nul
     return '参考价格，须复核';
   }
   function shell() {
-    container.innerHTML = `<section class="card scanner-board" aria-label="扫描套利机会"><div class="card-header scanner-board-heading"><div><h2>扫描套利机会</h2><p class="help">BNB／Solana 真实公开行情 · 参考价差与可执行报价分别展示</p></div><button type="button" class="button secondary small" data-scanner-board-refresh>刷新扫描结果</button></div><div class="card-body"><div class="scanner-board-status" role="status" aria-live="polite"></div><div class="scanner-board-meta"><span data-scanner-board-mode></span><span data-scanner-board-update></span></div><div class="scanner-board-counts"><div><span>参考价差达标</span><strong data-scanner-board-reference-count>—</strong></div><div><span>可执行报价</span><strong data-scanner-board-quote-count>—</strong></div><div><span>异常已隔离</span><strong data-scanner-board-quarantine-count>—</strong></div></div><div class="scanner-board-filters" role="group" aria-label="扫描机会类型"><button type="button" class="button small" data-scanner-board-filter="reference">参考价差达标</button><button type="button" class="button secondary small" data-scanner-board-filter="executable">可执行报价</button></div><div class="scanner-board-list"></div><p class="help scanner-board-note">参考价格不包含完整 Gas、滑点、税费及补库存成本。同币映射和报价核验通过后才有执行资格，提交前仍会重新检查；看板不会自动下单。</p></div></section>`;
+    container.innerHTML = `<section class="card scanner-board" aria-label="扫描套利机会"><div class="card-header scanner-board-heading"><div><h2>扫描套利机会</h2><p class="help" data-scanner-board-description></p></div><button type="button" class="button secondary small" data-scanner-board-refresh>刷新扫描结果</button></div><div class="card-body"><div class="scanner-board-status" role="status" aria-live="polite"></div><div class="scanner-board-meta"><span data-scanner-board-mode></span><span data-scanner-board-update></span></div><div class="scanner-board-counts"><div><span>参考价差达标</span><strong data-scanner-board-reference-count>—</strong></div><div><span data-scanner-board-quote-label>流程报价</span><strong data-scanner-board-quote-count>—</strong></div><div><span>异常已隔离</span><strong data-scanner-board-quarantine-count>—</strong></div></div><div class="scanner-board-filters" role="group" aria-label="扫描机会类型"><button type="button" class="button small" data-scanner-board-filter="reference">参考价差达标</button><button type="button" class="button secondary small" data-scanner-board-filter="executable">可执行报价</button></div><div class="scanner-board-list"></div><p class="help scanner-board-note">参考价格不包含完整 Gas、滑点、税费及补库存成本。同币映射和报价核验通过后才有执行资格，提交前仍会重新检查；看板不会自动下单。</p></div></section>`;
     $('[data-scanner-board-refresh]').addEventListener('click', () => { void refresh({ force: true }); });
     for (const button of container.querySelectorAll('[data-scanner-board-filter]')) button.addEventListener('click', () => { filter = button.dataset.scannerBoardFilter === 'executable' ? 'executable' : 'reference'; render(); });
     $('.scanner-board-list').addEventListener('click', event => {
@@ -90,19 +90,26 @@ export function createScannerBoard({ api, toast = () => {}, getState = () => nul
     if (!container) return;
     if (!$('.scanner-board-list')) shell();
     const entries = references(), quoted = entries.filter(entry => entry.quoted), unknown = !state || snapshotBlocked();
+    const demo = currentMode() === 'demo', quoteLabel = demo ? '模拟流程报价' : '可执行报价';
+    $('[data-scanner-board-description]').textContent = `BNB／Solana 真实公开行情 · 参考价差与${quoteLabel}分别展示`;
+    $('[data-scanner-board-quote-label]').textContent = quoteLabel;
+    $('[data-scanner-board-filter=executable]').textContent = quoteLabel;
+    $('.scanner-board-note').textContent = demo
+      ? '参考价格不包含完整 Gas、滑点、税费及补库存成本。模拟流程报价使用虚拟资金和模拟成交，不能当作实盘可成交报价；实盘成功率未验证。看板不会自动下单。'
+      : '参考价格不包含完整 Gas、滑点、税费及补库存成本。同币映射和报价核验通过后才有执行资格，提交前仍会重新检查；看板不会自动下单。';
     const status = $('.scanner-board-status');
     let message = '正在读取扫描结果…', level = 'neutral';
     if (!available()) message = '当前本机服务未启用机会扫描；请启动包含雷达的完整新版。';
     else if (readError) { message = '扫描结果读取失败，已有结果已暂停展示；请检查本机服务后刷新。'; level = 'error'; }
     else if (state && badStatuses.has(state.status)) { message = '扫描来源或行情读取未通过，暂不展示可用机会；请到雷达查看连接与筛选原因。'; level = 'error'; }
-    else if (pending && state) message = '正在更新看板结果；有效参考结果保留，可执行报价暂停展示。';
-    else if (state?.busy) message = '正在扫描公开行情；有效参考结果保留，可执行报价暂停展示。';
+    else if (pending && state) message = `正在更新看板结果；有效参考结果保留，${quoteLabel}暂停展示。`;
+    else if (state?.busy) message = `正在扫描公开行情；有效参考结果保留，${quoteLabel}暂停展示。`;
     else if (state?.status === 'partial' || state?.lastError) { message = '部分来源有连接提示；以下仅显示仍满足条件的新鲜参考结果，请结合雷达诊断复核。'; level = 'warning'; }
     else if (state?.status === 'cooldown') { message = '扫描请求冷却中；参考结果按有效期展示，不会延长旧报价。'; level = 'warning'; }
     else if (state?.enabled === false) { message = '自动扫描已停止；尚未过期的参考结果可查看，到期后会移出看板。'; level = 'warning'; }
     else if (state) message = entries.length ? '已读取符合条件的公开参考行情；报价和实际执行仍需核验。' : '当前没有满足条件的有效参考机会；已排除异常、过期及单侧无有效行情项目。';
     status.textContent = message; status.className = `scanner-board-status scanner-board-status-${level}`;
-    $('[data-scanner-board-mode]').textContent = `交易模式：${currentMode() === 'live' ? '实盘' : '模拟'} · 行情来源：公开行情扫描`;
+    $('[data-scanner-board-mode]').textContent = `交易模式：${demo ? '模拟流程演练（虚拟资金）' : '实盘'} · 参考行情来源：公开行情扫描`;
     $('[data-scanner-board-update]').textContent = `参考行情采集 ${displayTime(state?.updatedAt)} · 本机结果读取 ${displayTime(lastReadAt || null)}`;
     $('[data-scanner-board-reference-count]').textContent = unknown ? '—' : number(entries.length, 0);
     $('[data-scanner-board-quote-count]').textContent = unknown ? '—' : number(quoted.length, 0);
@@ -112,10 +119,10 @@ export function createScannerBoard({ api, toast = () => {}, getState = () => nul
     for (const button of container.querySelectorAll('[data-scanner-board-filter]')) { const active = button.dataset.scannerBoardFilter === filter; button.classList.toggle('secondary', !active); button.setAttribute('aria-pressed', String(active)); }
     const selected = filter === 'executable' ? quoted : entries;
     const listHtml = selected.length ? selected.slice(0, 30).map(({ row, quoted: executable }) => {
-      const asset = row.asset, report = executable ? row.evaluation : null;
+      const asset = row.asset, report = executable ? row.evaluation : null, simulated = report?.mode === 'demo';
       const quality = ['bnb', 'solana'].map(chain => `${chainName(chain)}：${confidence(row.market[chain])}`).join(' · ');
-      return `<article class="scanner-board-row" data-scanner-board-asset="${esc(asset.id)}"><div class="scanner-board-identity"><strong>${esc(asset.symbol || asset.name || '未命名资产')}</strong><small>${esc(asset.name || '')}</small><span class="badge ${executable ? 'green' : 'neutral'}">${executable ? '当前报价检查通过' : approved(asset) ? '参考行情，待报价' : '参考行情，映射待核验'}</span></div><div class="scanner-board-prices"><div><span>BNB</span><strong>${esc(price(row.market.bnb.priceUsd))}</strong></div><div><span>Solana</span><strong>${esc(price(row.market.solana.priceUsd))}</strong></div><small>${esc(chainName(row.buyChain))} → ${esc(chainName(row.sellChain))} · 参考价差 ${esc(number(row.spreadBps / 100, 3))}%</small><small>${esc(quality)}</small></div><div class="scanner-board-quote"><span>预计现金流价差</span><strong class="${report && report.netProfitUsd >= 0 ? 'positive' : report ? 'negative' : ''}">${report ? esc(money(report.netProfitUsd)) : '未报价'}</strong><small>${report ? `金额 ${esc(money(report.amountUsd))} · Gas ${esc(money(report.gasUsd))} · 滑点 ${esc(money(report.slippageUsd))}` : 'Gas／滑点／税费与库存须复核'}</small><small>${report ? `有效至 ${esc(displayTime(report.expiresAt))}` : '参考价差不能当作净收益'}</small></div><button type="button" class="button secondary small" data-scanner-board-open="${esc(asset.id)}">查看并复核</button></article>`;
-    }).join('') : `<div class="scanner-board-empty"><strong>${unknown ? '暂无法判断是否有机会' : filter === 'executable' ? '暂无当前可执行报价' : '暂无符合条件的参考机会'}</strong><p>${unknown ? '请检查本机服务或到雷达查看来源状态，读取失败不代表市场没有机会。' : filter === 'executable' ? '需要先完成同币映射和双边报价；过期、模式不符、费用不完整或执行暂停的报价不会列在这里。' : '可到雷达查看发现数量、筛选条件及未入榜原因。异常项目不会补入机会列表。'}</p></div>`;
+      return `<article class="scanner-board-row" data-scanner-board-asset="${esc(asset.id)}"><div class="scanner-board-identity"><strong>${esc(asset.symbol || asset.name || '未命名资产')}</strong><small>${esc(asset.name || '')}</small><span class="badge ${executable ? simulated ? 'amber' : 'green' : 'neutral'}">${executable ? simulated ? '模拟流程验证通过' : '当前报价检查通过' : approved(asset) ? '参考行情，待报价' : '参考行情，映射待核验'}</span></div><div class="scanner-board-prices"><div><span>BNB</span><strong>${esc(price(row.market.bnb.priceUsd))}</strong></div><div><span>Solana</span><strong>${esc(price(row.market.solana.priceUsd))}</strong></div><small>${esc(chainName(row.buyChain))} → ${esc(chainName(row.sellChain))} · 参考价差 ${esc(number(row.spreadBps / 100, 3))}%</small><small>${esc(quality)}</small></div><div class="scanner-board-quote"><span>${simulated ? '模拟估算现金流价差' : '预计现金流价差'}</span><strong class="${report && report.netProfitUsd >= 0 ? 'positive' : report ? 'negative' : ''}">${report ? esc(money(report.netProfitUsd)) : '未报价'}</strong><small>${report ? `${simulated ? '虚拟金额' : '金额'} ${esc(money(report.amountUsd))} · ${simulated ? '模拟 Gas' : 'Gas'} ${esc(money(report.gasUsd))} · ${simulated ? '模拟滑点' : '滑点'} ${esc(money(report.slippageUsd))}` : 'Gas／滑点／税费与库存须复核'}</small><small>${report ? `${simulated ? '模拟报价' : '报价'}有效至 ${esc(displayTime(report.expiresAt))}` : '参考价差不能当作净收益'}</small></div><button type="button" class="button secondary small" data-scanner-board-open="${esc(asset.id)}">查看并复核</button></article>`;
+    }).join('') : `<div class="scanner-board-empty"><strong>${unknown ? '暂无法判断是否有机会' : filter === 'executable' ? `暂无当前${quoteLabel}` : '暂无符合条件的参考机会'}</strong><p>${unknown ? '请检查本机服务或到雷达查看来源状态，读取失败不代表市场没有机会。' : filter === 'executable' ? `${demo ? '此分组仅验证模拟流程；' : ''}需要先完成同币映射和双边报价；过期、模式不符、费用不完整或执行暂停的报价不会列在这里。` : '可到雷达查看发现数量、筛选条件及未入榜原因。异常项目不会补入机会列表。'}</p></div>`;
     if ($('.scanner-board-list').innerHTML !== listHtml) $('.scanner-board-list').innerHTML = listHtml;
   }
   function refresh({ force = false } = {}) {

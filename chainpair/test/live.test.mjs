@@ -102,3 +102,54 @@ test('known reverted chain receipt remains attached for persistent failure evide
   adapter.rpc.bnb.call = async () => ({ status: '0x0', transactionHash: '0xknown' });
   await assert.rejects(adapter.receipt('bnb', '0xknown'), error => error.safe && error.hash === '0xknown' && error.receipt.status === '0x0');
 });
+
+function timedQuoteFixture(t, { ttlMs = 5000, requestMs = 400 } = {}) {
+  const start = Date.now(); t.mock.timers.enable({ apis: ['Date'], now: start });
+  const config = { quoteTtlMs: ttlMs, chains: { bnb: { rpcs: [], nativeUsd: 600 }, solana: { rpcs: [], nativeUsd: 150 } }, risk: { maxSlippageBps: 50, maxPriceImpactBps: 100 } };
+  const calls = [], fromToken = { address: token, decimals: 18 }, toToken = { address: other, decimals: 18 };
+  const adapter = new LiveAdapter({ getConfig: () => config, vault: {
+    publicStatus: () => ({ bnb: { address: owner, mode: 'readonly' }, solana: { address: solOwner, mode: 'readonly' } }),
+    signer: () => { throw new Error('quote must not request a signer'); }
+  }, fetchImpl: async () => { throw new Error('tests forbid real network access'); } });
+  adapter.validateToken = async () => {};
+  adapter.okx = async endpoint => {
+    calls.push(endpoint); t.mock.timers.tick(requestMs);
+    if (endpoint.endsWith('/aggregator/swap')) return { routerResult: { chainIndex: '56', fromToken: { tokenContractAddress: token, tokenUnitPrice: '1' }, toToken: { tokenContractAddress: other, tokenUnitPrice: '1' }, fromTokenAmount: '1000', toTokenAmount: '990', priceImpactPercent: '0.1' }, tx: {} };
+    if (endpoint.endsWith('/cross-chain/quote')) return { fromChainIndex: '56', toChainIndex: '501', fromToken: { tokenContractAddress: token }, toToken: { tokenContractAddress: mint }, fromTokenAmount: '1000', routerList: [{ bridgeId: '1', bridgeName: 'debridge', toTokenAmount: '990', priceImpactPercentage: '0.1' }] };
+    if (endpoint.endsWith('/cross-chain/swap')) return { tx: {}, router: { bridgeId: '1' }, fromTokenAmount: '1000', toTokenAmount: '990', minimumReceived: '985' };
+    throw new Error('unexpected endpoint');
+  };
+  adapter.estimateFee = async () => { t.mock.timers.tick(200); return { feeUsd: .006, bnbGas: .00001, solFee: 0, estimatedRentUsd: 0 }; };
+  adapter.validateEvmTx = async () => { t.mock.timers.tick(100); };
+  adapter.assertAllowance = async () => { t.mock.timers.tick(100); };
+  return { adapter, start, calls, fromToken, toToken };
+}
+
+test('swap quote timing starts before its HTTP request and includes validation latency in the original TTL', async t => {
+  const { adapter, start, fromToken, toToken } = timedQuoteFixture(t);
+  const quote = await adapter.quoteSwap({ chain: 'bnb', fromToken, toToken, amountRaw: '1000' });
+  assert.equal(Date.parse(quote.requestedAt), start);
+  assert.equal(Date.parse(quote.receivedAt), start + 400);
+  assert.equal(Date.parse(quote.validatedAt), start + 800);
+  assert.equal(Date.parse(quote.expiresAt), start + 5000);
+  assert.equal(Date.parse(quote.expiresAt) - Date.now(), 4200);
+});
+
+test('bridge quote TTL includes both the route request and transaction construction', async t => {
+  const { adapter, start, calls, fromToken } = timedQuoteFixture(t);
+  const quote = await adapter.quoteTokenBridge({ fromChain: 'bnb', toChain: 'solana', fromToken, toToken: { address: mint, decimals: 6 }, amountRaw: '1000' });
+  assert.deepEqual(calls, ['/api/v6/dex/cross-chain/quote', '/api/v6/dex/cross-chain/swap']);
+  assert.equal(Date.parse(quote.requestedAt), start);
+  assert.equal(Date.parse(quote.receivedAt), start + 800);
+  assert.equal(Date.parse(quote.validatedAt), start + 1200);
+  assert.equal(Date.parse(quote.expiresAt), start + 5000);
+});
+
+for (const kind of ['swap', 'bridge']) test(`${kind} response that expires during network and validation is never remembered`, async t => {
+  const { adapter, fromToken, toToken } = timedQuoteFixture(t, { ttlMs: 1000, requestMs: 800 });
+  const pending = kind === 'swap'
+    ? adapter.quoteSwap({ chain: 'bnb', fromToken, toToken, amountRaw: '1000' })
+    : adapter.quoteTokenBridge({ fromChain: 'bnb', toChain: 'solana', fromToken, toToken: { address: mint, decimals: 6 }, amountRaw: '1000' });
+  await assert.rejects(pending, /报价已过期/);
+  assert.equal(adapter.quotes.size, 0);
+});

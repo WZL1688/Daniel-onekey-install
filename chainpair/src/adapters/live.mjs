@@ -210,12 +210,17 @@ export class LiveAdapter {
     for (const [id, q] of this.quotes) if (Date.parse(q.expiresAt) < Date.now()) this.quotes.delete(id);
     this.quotes.set(quote.id, structuredClone(quote)); return quote;
   }
+  assertQuoteFresh(quote) {
+    if (!Number.isFinite(Date.parse(quote?.expiresAt)) || Date.parse(quote.expiresAt) <= Date.now()) throw new AdapterError('报价已过期，未签名或广播新的交易，请重新报价');
+  }
   async quoteSwap({ chain, fromToken, toToken, amountRaw }) {
     positive(amountRaw); const c = this.getConfig(), wallet = this.wallet(chain);
     await Promise.all([this.validateToken(chain, fromToken), this.validateToken(chain, toToken)]);
+    const requestedAt = new Date().toISOString();
     const result = await this.okx('/api/v6/dex/aggregator/swap', { chainIndex: CHAINS[chain], fromTokenAddress: fromToken.address, toTokenAddress: toToken.address, amount: amountRaw,
       userWalletAddress: wallet, swapReceiverAddress: wallet, swapMode: 'exactIn', slippagePercent: decimal(c.risk.maxSlippageBps).div(100).toString(),
       autoSlippage: 'false', priceImpactProtectionPercent: decimal(c.risk.maxPriceImpactBps).div(100).toString(), solanaTransactionVersion: chain === 'solana' ? 'V0' : undefined });
+    const receivedAt = new Date().toISOString();
     const route = result.routerResult;
     if (!route || !result.tx) throw new AdapterError('OKX swap 响应结构不受支持');
     if (String(route.chainIndex) !== CHAINS[chain] || !same(chain, route.fromToken?.tokenContractAddress, fromToken.address) || !same(chain, route.toToken?.tokenContractAddress, toToken.address) || raw(route.fromTokenAmount) !== amountRaw) throw new AdapterError('OKX 报价链、代币或数量不匹配');
@@ -227,8 +232,9 @@ export class LiveAdapter {
     const fee = await this.estimateFee(chain, result.tx);
     const quote = { id: randomUUID(), kind: 'swap', fromChain: chain, toChain: chain, fromToken, toToken, sender: wallet, recipient: wallet,
       amountInRaw: amountRaw, amountOutRaw: out, minOutRaw: minimum, feeUsd: fee.feeUsd, estimatedRentUsd: fee.estimatedRentUsd, bnbGas: fee.bnbGas, solFee: fee.solFee,
-      priceImpactBps: impact, expiresAt: new Date(Date.now() + (c.quoteTtlMs ?? 20000)).toISOString(), raw: result, tx: result.tx, fromUnitUsd: route.fromToken.tokenUnitPrice, toUnitUsd: route.toToken.tokenUnitPrice };
+      priceImpactBps: impact, requestedAt, receivedAt, expiresAt: new Date(Date.parse(requestedAt) + (c.quoteTtlMs ?? 20000)).toISOString(), raw: result, tx: result.tx, fromUnitUsd: route.fromToken.tokenUnitPrice, toUnitUsd: route.toToken.tokenUnitPrice };
     if (chain === 'bnb') { await this.validateEvmTx(quote, quote.tx); await this.assertAllowance(quote); } else await this.validateSolanaTx(quote, this.decodeSolana(quote.tx.data));
+    quote.validatedAt = new Date().toISOString(); this.assertQuoteFresh(quote);
     return this.remember(quote);
   }
   async quoteTokenBridge({ fromChain, toChain, fromToken, toToken, amountRaw }) {
@@ -237,6 +243,7 @@ export class LiveAdapter {
     await Promise.all([this.validateToken(fromChain, fromToken), this.validateToken(toChain, toToken)]);
     const params = { fromChainIndex: CHAINS[fromChain], toChainIndex: CHAINS[toChain], fromTokenAddress: fromToken.address, toTokenAddress: toToken.address,
       amount: amountRaw, slippage: decimal(c.risk.maxSlippageBps).div(10000).toString(), userWalletAddress: sender, receiveAddress: recipient };
+    const requestedAt = new Date().toISOString();
     const info = await this.okx('/api/v6/dex/cross-chain/quote', { ...params, checkApprove: 'true' });
     if (String(info.fromChainIndex) !== CHAINS[fromChain] || String(info.toChainIndex) !== CHAINS[toChain] || raw(info.fromTokenAmount) !== amountRaw ||
       !same(fromChain, info.fromToken?.tokenContractAddress, fromToken.address) || !same(toChain, info.toToken?.tokenContractAddress, toToken.address)) throw new AdapterError('跨链报价链、代币或数量不匹配');
@@ -252,6 +259,7 @@ export class LiveAdapter {
     const impact = decimal(route.priceImpactPercentage).abs().mul(100).toNumber();
     if (impact > c.risk.maxPriceImpactBps) throw new AdapterError('跨链价格冲击超过限制');
     const built = await this.okx('/api/v6/dex/cross-chain/swap', { ...params, bridgeId: route.bridgeId });
+    const receivedAt = new Date().toISOString();
     if (!built.tx || String(built.router?.bridgeId) !== String(route.bridgeId) || raw(built.fromTokenAmount) !== amountRaw) throw new AdapterError('跨链构建路线与报价不匹配');
     const out = positive(built.toTokenAmount), minimum = positive(built.minimumReceived);
     const localMinimum = decimal(out).mul(new Decimal(1).minus(decimal(c.risk.maxSlippageBps).div(10000))).floor();
@@ -261,8 +269,9 @@ export class LiveAdapter {
     // destination rent is measured at settlement, and missing fee information blocks submit.
     const quote = { id: randomUUID(), kind: 'bridge', fromChain, toChain, fromToken, toToken, sender, recipient,
       amountInRaw: amountRaw, amountOutRaw: out, minOutRaw: minimum, feeUsd: fee.feeUsd, estimatedRentUsd: fee.estimatedRentUsd, bnbGas: fee.bnbGas, solFee: fee.solFee,
-      priceImpactBps: impact, bridgeId: String(route.bridgeId), bridgeName: route.bridgeName, expiresAt: new Date(Date.now() + (c.quoteTtlMs ?? 20000)).toISOString(), raw: { quote: info, swap: built }, tx: built.tx };
+      priceImpactBps: impact, bridgeId: String(route.bridgeId), bridgeName: route.bridgeName, requestedAt, receivedAt, expiresAt: new Date(Date.parse(requestedAt) + (c.quoteTtlMs ?? 20000)).toISOString(), raw: { quote: info, swap: built }, tx: built.tx };
     if (fromChain === 'bnb') { await this.validateEvmTx(quote, quote.tx); await this.assertAllowance(quote); } else await this.validateSolanaTx(quote, this.decodeSolana(quote.tx.data));
+    quote.validatedAt = new Date().toISOString(); this.assertQuoteFresh(quote);
     return this.remember(quote);
   }
   async estimateFee(chain, tx) {
@@ -357,10 +366,11 @@ export class LiveAdapter {
     if (fee.solFee > this.getConfig().risk.maxSolFee) throw new AdapterError('Solana 网络费超过限制');
     return fee;
   }
-  async submit(externalQuote, { onSubmitted = async () => {} } = {}) {
+  async submit(externalQuote, { onSubmitted = async () => {}, beforeBroadcast = () => {} } = {}) {
     const quote = this.quotes.get(externalQuote.id);
     if (!quote || JSON.stringify(quote) !== JSON.stringify(externalQuote)) throw new AdapterError('报价未知或已被修改，请重新报价');
-    if (Date.parse(quote.expiresAt) < Date.now()) throw new AdapterError('报价已过期，请重新报价');
+    this.assertQuoteFresh(quote);
+    const assertReady = () => { this.assertQuoteFresh(quote); beforeBroadcast(); this.assertQuoteFresh(quote); };
     if (this.used.has(quote.id)) throw new AdapterError('报价已提交，禁止重复发送');
     if (!same(quote.fromChain, this.wallet(quote.fromChain), quote.sender) || !same(quote.toChain, this.wallet(quote.toChain), quote.recipient)) throw new AdapterError('钱包已变更，必须重新报价');
     const wallet = this.vault.publicStatus()[quote.fromChain], browser = wallet?.mode === 'browser';
@@ -380,9 +390,11 @@ export class LiveAdapter {
       const tx = quote.tx;
       const request = { to: tx.to, data: tx.data, value: BigInt(tx.value ?? 0), chainId: 56, gasLimit: BigInt(tx.gas ?? tx.gasLimit), gasPrice: BigInt(tx.gasPrice ?? tx.maxFeePerGas) };
       await this.rpc.bnb.call('eth_call', [{ from: quote.sender, to: request.to, data: request.data, value: `0x${request.value.toString(16)}` }, 'pending']);
-      if (browser) return this.submitBrowserEvm(quote, request, onSubmitted);
+      assertReady();
+      if (browser) return this.submitBrowserEvm(quote, request, onSubmitted, assertReady);
       const nonce = await this.rpc.bnb.call('eth_getTransactionCount', [quote.sender, 'pending']);
       request.nonce = Number(BigInt(nonce));
+      assertReady();
       signed = await signer.signTransaction(request); hash = keccak256(signed);
     } else {
       let transaction = this.decodeSolana(quote.tx.data);
@@ -390,7 +402,7 @@ export class LiveAdapter {
       if (browser) {
         // A quote is consumed before asking the extension. A rejected, lost or
         // timed-out popup must never cause an automatic signing retry.
-        this.used.add(quote.id);
+        assertReady(); this.used.add(quote.id);
         const result = await this.browserWallets.request('solana', { kind: 'solSign', quoteId: quote.id, expiresAt: quote.expiresAt,
           payload: { transactionBase64: Buffer.from(transaction.serialize()).toString('base64'), sender: quote.sender },
           summary: { kind: quote.kind, amountInRaw: quote.amountInRaw, fromToken: quote.fromToken.address, toToken: quote.toToken.address } });
@@ -398,7 +410,7 @@ export class LiveAdapter {
         if (Date.parse(quote.expiresAt) <= Date.now()) throw new AdapterError('插件签名期间报价已过期，未广播交易，请重新报价');
         balances = await this.balances('solana');
         if (decimal(balances.native).minus(fee.solFee).lt(reserve)) throw new AdapterError('签名后原生币余额变化，Gas 储备不足，未广播交易');
-      } else transaction.sign([signer]);
+      } else { assertReady(); transaction.sign([signer]); }
       signed = Buffer.from(transaction.serialize()).toString('base64'); hash = bs58.encode(transaction.signatures[0]);
       const owned = (await this.rpc.solana.call('getTokenAccountsByOwner', [quote.sender, { programId: TOKEN_PROGRAMS[0] }, { encoding: 'base64', commitment: 'confirmed' }])).value ?? [];
       const addresses = owned.map(a => a.pubkey), beforeAccounts = owned.map(a => a.account);
@@ -414,13 +426,15 @@ export class LiveAdapter {
       const debit = Math.max(0, Number(balances.nativeRaw) - Number(postLamports)) / 1e9;
       if (debit > c.risk.maxSolFee || Number(postLamports) / 1e9 < c.risk.reserveSol) throw new AdapterError('Solana 模拟网络费与租金总扣款超过限制或 Gas 储备不足');
       validateSolanaSimulationTokens({ quote, beforeAccounts, afterAccounts: simulation.value.accounts.slice(1) });
-      if (browser && Date.parse(quote.expiresAt) <= Date.now()) throw new AdapterError('插件签名及模拟期间报价已过期，未广播交易，请重新报价');
+      assertReady();
     }
+    assertReady();
     const submission = { id: randomUUID(), quote, chain: quote.fromChain, hash, blockhash, submittedAt: new Date().toISOString(), broadcastState: 'prepared' };
     this.used.add(quote.id);
     // Persist the deterministic hash BEFORE broadcasting: a lost RPC response
     // cannot cause an automatic replay. Never expose signed bytes in API output.
     await onSubmitted(json(submission));
+    assertReady();
     if (quote.fromChain === 'bnb') {
       const returned = await this.rpc.bnb.call('eth_sendRawTransaction', [signed], { broadcast: true });
       if (String(returned).toLowerCase() !== hash.toLowerCase()) throw new AdapterError('RPC 返回哈希与本地签名不一致，必须人工核对');
@@ -430,10 +444,10 @@ export class LiveAdapter {
     }
     submission.broadcastState = 'sent'; return submission;
   }
-  async submitBrowserEvm(quote, request, onSubmitted) {
+  async submitBrowserEvm(quote, request, onSubmitted, assertReady = () => this.assertQuoteFresh(quote)) {
     const transaction = { from: quote.sender, to: request.to, data: request.data,
       value: `0x${request.value.toString(16)}`, gas: `0x${request.gasLimit.toString(16)}`, gasPrice: `0x${request.gasPrice.toString(16)}`, chainId: '0x38' };
-    this.used.add(quote.id);
+    assertReady(); this.used.add(quote.id);
     const result = await this.browserWallets.request('bnb', { kind: 'evmSend', quoteId: quote.id, expiresAt: quote.expiresAt, payload: { transaction },
       summary: { kind: quote.kind, amountInRaw: quote.amountInRaw, fromToken: quote.fromToken.address, toToken: quote.toToken.address } });
     if (!/^0x[0-9a-fA-F]{64}$/.test(result?.hash ?? '')) throw new AdapterError('插件未返回有效交易哈希，交易结果不确定，请人工核对');

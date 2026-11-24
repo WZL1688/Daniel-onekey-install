@@ -107,13 +107,13 @@ test('Solana browser signature must be cryptographically valid over the exact or
   assert.throws(() => validateBrowserSolanaSignature(encoded, original, Keypair.generate().publicKey.toBase58()));
 });
 
-function solFixture({ corrupt = false, expireWhileSigning = false } = {}) {
+function solFixture({ corrupt = false, expireWhileSigning = false, mode = 'browser' } = {}) {
   const keypair = Keypair.generate(), original = solTransaction(keypair), sender = keypair.publicKey.toBase58();
   const calls = []; const quote = { id: 'browser-sol-quote', kind: 'bridge', fromChain: 'solana', toChain: 'bnb', sender, recipient: bnbOwner,
     fromToken: { address: solMint, decimals: 6 }, toToken: { address: tokenA, decimals: 18 }, amountInRaw: '500', amountOutRaw: '495', minOutRaw: '490',
     expiresAt: new Date(Date.now() + 60000).toISOString(), tx: { data: bs58.encode(original.serialize()) } };
   const adapter = new LiveAdapter({ getConfig: () => config,
-    vault: { publicStatus: () => ({ solana: { address: sender, mode: 'browser', canSign: true }, bnb: { address: bnbOwner, mode: 'readonly' } }), signer: () => { throw new Error('private signer should not be called'); } },
+    vault: { publicStatus: () => ({ solana: { address: sender, mode, canSign: true }, bnb: { address: bnbOwner, mode: 'readonly' } }), signer: () => { if (mode !== 'private') throw new Error('private signer should not be called'); calls.push('local-signer'); return keypair; } },
     browserWallets: { request: async (chain, request) => {
       calls.push('broker'); assert.equal(chain, 'solana'); assert.equal(request.kind, 'solSign'); assert.equal(request.payload.sender, sender);
       const signed = corrupt ? solTransaction(keypair, 1) : VersionedTransaction.deserialize(Buffer.from(request.payload.transactionBase64, 'base64'));
@@ -156,5 +156,74 @@ test('Solana quote expiring in the extension is not broadcast after signing retu
   const { adapter, quote, calls } = solFixture({ expireWhileSigning: true });
   quote.expiresAt = new Date(Date.now() + 15).toISOString(); adapter.remember(quote);
   await assert.rejects(adapter.submit(quote), error => error.safe && /报价已过期/.test(error.message));
+  assert.equal(calls.includes('sendTransaction'), false);
+});
+
+test('local BNB expiry during nonce retrieval prevents private signing and broadcast', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const { adapter, quote, calls } = evmFixture({ mode: 'private' });
+  adapter.vault.signer = () => ({ signTransaction: async () => { calls.push('private-sign'); throw new Error('expired transaction must not be signed'); } });
+  const original = adapter.rpc.bnb.call;
+  adapter.rpc.bnb.call = async (method, params) => { const result = await original(method, params); if (method === 'eth_getTransactionCount') t.mock.timers.tick(60001); return result; };
+  await assert.rejects(adapter.submit(quote, { onSubmitted: async () => { calls.push('journal'); } }), /报价已过期/);
+  assert.equal(calls.includes('private-sign'), false); assert.equal(calls.includes('journal'), false);
+  assert.equal(calls.includes('eth_sendRawTransaction'), false);
+});
+
+test('local BNB expiry during asynchronous signing prevents journaling and broadcast', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const { adapter, quote, calls } = evmFixture({ mode: 'private' });
+  const getSigner = adapter.vault.signer;
+  adapter.vault.signer = () => { const signer = getSigner(); return { signTransaction: async request => { const signed = await signer.signTransaction(request); calls.push('private-sign'); t.mock.timers.tick(60001); return signed; } }; };
+  await assert.rejects(adapter.submit(quote, { onSubmitted: async () => { calls.push('journal'); } }), /报价已过期/);
+  assert.equal(calls.includes('private-sign'), true); assert.equal(calls.includes('journal'), false);
+  assert.equal(calls.includes('eth_sendRawTransaction'), false);
+});
+
+test('quote expiry while persisting deterministic submission consumes the quote without broadcasting', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const { adapter, quote, calls } = evmFixture({ mode: 'private' }); let journal;
+  await assert.rejects(adapter.submit(quote, { onSubmitted: async sent => { journal = sent; t.mock.timers.tick(60001); } }), /报价已过期/);
+  assert.equal(journal.broadcastState, 'prepared'); assert.match(journal.hash, /^0x[0-9a-f]{64}$/);
+  assert.equal(adapter.used.has(quote.id), true); assert.equal(calls.includes('eth_sendRawTransaction'), false);
+  await assert.rejects(adapter.submit(quote)); assert.equal(calls.includes('eth_sendRawTransaction'), false);
+});
+
+test('whole-plan callback can veto BNB after asynchronous preflight before any private signature', async () => {
+  const { adapter, quote, calls } = evmFixture({ mode: 'private' }); let wholePlanValid = true;
+  adapter.vault.signer = () => ({ signTransaction: async () => { calls.push('private-sign'); throw new Error('invalid whole plan must not be signed'); } });
+  const original = adapter.rpc.bnb.call;
+  adapter.rpc.bnb.call = async (method, params) => { const result = await original(method, params); if (method === 'eth_getTransactionCount') wholePlanValid = false; return result; };
+  await assert.rejects(adapter.submit(quote, { beforeBroadcast: () => { if (!wholePlanValid) throw Object.assign(new Error('SELL quote expired'), { safe: true }); } }), /SELL quote expired/);
+  assert.equal(calls.includes('private-sign'), false); assert.equal(calls.includes('eth_sendRawTransaction'), false);
+});
+
+test('browser BNB expiry during preflight prevents requesting a signing popup', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const { adapter, quote, calls } = evmFixture();
+  const original = adapter.rpc.bnb.call;
+  adapter.rpc.bnb.call = async (method, params) => { const result = await original(method, params); if (method === 'eth_call') t.mock.timers.tick(60001); return result; };
+  await assert.rejects(adapter.submit(quote), /报价已过期/);
+  assert.equal(calls.includes('broker'), false); assert.equal(calls.includes('eth_sendRawTransaction'), false);
+});
+
+test('local Solana expiry during input-balance check prevents private key use', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const { adapter, quote, calls } = solFixture({ mode: 'private' });
+  const getSigner = adapter.vault.signer;
+  adapter.vault.signer = () => { const signer = getSigner(); return { publicKey: signer.publicKey, get secretKey() { calls.push('private-sign'); return signer.secretKey; } }; };
+  adapter.balanceRaw = async () => { t.mock.timers.tick(60001); return '1000'; };
+  await assert.rejects(adapter.submit(quote), /报价已过期/);
+  assert.equal(calls.includes('private-sign'), false); assert.equal(calls.includes('simulateTransaction'), false);
+  assert.equal(calls.includes('sendTransaction'), false);
+});
+
+test('local Solana expiry during signed simulation prevents journaling and broadcast', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const { adapter, quote, calls } = solFixture({ mode: 'private' });
+  const original = adapter.rpc.solana.call;
+  adapter.rpc.solana.call = async (method, params) => { const result = await original(method, params); if (method === 'simulateTransaction') t.mock.timers.tick(60001); return result; };
+  await assert.rejects(adapter.submit(quote, { onSubmitted: async () => { calls.push('journal'); } }), /报价已过期/);
+  assert.equal(calls.includes('simulateTransaction'), true); assert.equal(calls.includes('journal'), false);
   assert.equal(calls.includes('sendTransaction'), false);
 });

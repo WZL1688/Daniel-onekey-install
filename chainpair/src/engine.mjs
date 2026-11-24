@@ -12,8 +12,9 @@ const terminal = new Set(['COMPLETED', 'REVIEWED']);
 const safeError = message => Object.assign(new Error(message), { safe: true });
 const errText = e => e?.safe ? String(e.message).replace(/https?:\/\/[^\s]+/g, '[远程服务]').slice(0, 500) : '操作失败，请检查配置及链上回执；程序已保留状态';
 const quoteFresh = q => q && Number.isFinite(Date.parse(q.expiresAt)) && Date.parse(q.expiresAt) > Date.now();
+const LIVE_MINIMUM_QUOTE_REMAINING_MS = 3000;
 export class Engine {
-  constructor({ store, vault, browserWallets, adapterFactory, marketFetchImpl, phaseDelayMs = 0 }) {
+  constructor({ store, vault, browserWallets, adapterFactory, marketFetchImpl, phaseDelayMs = 0, verificationOnly = false }) {
     this.store = store; this.vault = vault; this.config = store.config;
     this.adapterFactory = adapterFactory; this.phaseDelayMs = phaseDelayMs; this.browserWallets = browserWallets;
     this.marketFetchImpl = marketFetchImpl;
@@ -22,7 +23,9 @@ export class Engine {
     this.configuring = false; this.configRevision = 0; this.quoteBuilders = 0;
     this.pausedReason = ''; this.bridgeQuotes = new Map(); this.timer = null; this.lastError = '';
     this.inventoryCoordinator = null; this.executionGuard = null;
+    this.verificationOnly = verificationOnly === true;
   }
+  assertExecutionAllowed() { if (this.verificationOnly) throw safeError('真实只读复核禁止签名、广播或执行交易'); }
   errorText(error) { const text = errText(error); return this.vault.redact ? this.vault.redact(text) : text; }
   async init() {
     await this.makeAdapter();
@@ -132,13 +135,31 @@ export class Engine {
       const wallets = this.vault.publicStatus();
       for (const chain of ['bnb', 'solana']) {
         const wallet = wallets[chain];
-        if (!['private', 'browser'].includes(wallet?.mode) || !wallet?.unlocked || wallet.canSign === false) reasons.push(wallet?.mode === 'browser' ? `${chain} 插件钱包未连接，请保持页面打开并重新连接` : `${chain} 钱包未解锁或为只读`);
+        if (this.verificationOnly) { if (!wallet?.address) reasons.push(`${chain} 未导入钱包或只读地址`); }
+        else if (!['private', 'browser'].includes(wallet?.mode) || !wallet?.unlocked || wallet.canSign === false) reasons.push(wallet?.mode === 'browser' ? `${chain} 插件钱包未连接，请保持页面打开并重新连接` : `${chain} 钱包未解锁或为只读`);
         if (!c.chains[chain].tokenAddress && !bridge) reasons.push(`${chain} 尚未配置代币地址`);
       }
       const state = this.vault.publicStatus();
       if (!state.okxConfigured || state.locked) reasons.push('OKX API 凭据未配置或保险库未解锁');
     }
     return reasons;
+  }
+  planQualityReasons(quotes, { trade, spentUsd = this.config.risk.amountUsd, sellQuote = quotes.at(-1) } = {}) {
+    const reasons = this.checkFees(quotes, { trade });
+    if (this.config.mode === 'live' && quotes.some(q => !Number.isFinite(Date.parse(q.expiresAt)) || Date.parse(q.expiresAt) - Date.now() < LIVE_MINIMUM_QUOTE_REMAINING_MS)) reasons.push('完整交易计划报价剩余有效期不足 3 秒，请重新复核');
+    const paidFees = (trade?.legs || []).filter(leg => leg.receipt).reduce((sum, leg) => sum + (leg.receipt.feeUsd ?? NaN) + (leg.receipt.rentUsd ?? NaN), 0);
+    const pendingFees = quotes.reduce((sum, q) => sum + q.feeUsd, 0);
+    const conservativeProceeds = value(sellQuote?.minOutRaw, sellQuote?.toToken?.decimals);
+    const netProfitUsd = conservativeProceeds - spentUsd - paidFees - pendingFees;
+    if (!finite(netProfitUsd) || netProfitUsd < this.config.risk.minProfitUsd) reasons.push('当前完整交易计划保守净收益未达到利润门槛');
+    const stressNetProfitUsd = this.config.mode === 'live' ? conservativeProceeds * .995 - spentUsd - paidFees - pendingFees * 1.25 : null;
+    if (this.config.mode === 'live' && (!finite(stressNetProfitUsd) || stressNetProfitUsd < this.config.risk.minProfitUsd)) reasons.push('压力场景（卖出最低收入再降 50bps、未付费用增加 25%）净收益未达到利润门槛');
+    return { reasons: [...new Set(reasons)], netProfitUsd, stressNetProfitUsd };
+  }
+  assertPlanQuality(quotes, options) {
+    const result = this.planQualityReasons(quotes, options);
+    if (result.reasons.length) throw safeError(result.reasons.join('；'));
+    return result.netProfitUsd;
   }
   checkFees(quotes, { trade } = {}) {
     const c = this.config; const reasons = [];
@@ -194,7 +215,7 @@ export class Engine {
       const timestamp = Date.parse(m?.updatedAt);
       if (!Number.isFinite(timestamp) || Date.now() - timestamp > c.risk.maxQuoteAgeMs || timestamp > Date.now() + 5000) reasons.push(`${chain} 行情已过期`);
     }
-    if (reasons.some(r => /行情/.test(r))) { this.opportunity = { executable: false, amountUsd: c.risk.amountUsd, reasons, quotedAt: now() }; return; }
+    if (reasons.some(r => /行情/.test(r))) { this.opportunity = { executable: false, qualityPassed: false, amountUsd: c.risk.amountUsd, reasons, quotedAt: now() }; return; }
     const buyChain = prices[0] <= prices[1] ? 'bnb' : 'solana'; const sellChain = buyChain === 'bnb' ? 'solana' : 'bnb';
     const base = { buyChain, sellChain, amountUsd: c.risk.amountUsd, spreadBps: (this.market[sellChain].priceUsd / this.market[buyChain].priceUsd - 1) * 10000, quotedAt: now() };
     if (!finite(this.balances[buyChain]?.stableUsd) || this.balances[buyChain].stableUsd < c.risk.amountUsd) reasons.push('低价链可用稳定币不足');
@@ -223,17 +244,18 @@ export class Engine {
       const conservativeProceeds = value(sell.minOutRaw, this.token(sellChain, 'stable').decimals);
       const expectedProceeds = value(sell.amountOutRaw, this.token(sellChain, 'stable').decimals);
       const netProfitUsd = conservativeProceeds - c.risk.amountUsd - gasUsd;
-      reasons.push(...this.checkFees(quotes));
+      const quality = this.planQualityReasons(quotes); reasons.push(...quality.reasons);
       if (!finite(netProfitUsd) || netProfitUsd < c.risk.minProfitUsd) reasons.push('预计净收益未达到利润门槛');
       const bridgeFeeUsd = bridge ? Math.max(0, value(bridge.amountInRaw, bridge.fromToken.decimals) * this.market[buyChain].priceUsd - value(bridge.amountOutRaw, bridge.toToken.decimals) * this.market[buyChain].priceUsd) : 0;
       if (c.executionMode === 'inventory' && c.mode === 'live' && quotes.some(q=>!finite(q.estimatedRentUsd)||q.estimatedRentUsd<0)) reasons.push('库存报价缺少可核验租金估算');
-      this.opportunity = { ...base, executionMode: c.executionMode || 'bridge', assetId: c.inventory?.assetId || '', ...(inventoryReserveRaw ? { inventoryReserveRaw, inventoryAvailableRaw: this.availableInventory(sellChain), closedInventory: false } : {}), tokenAmount: value(buy.amountOutRaw, buy.toToken.decimals), grossProfitUsd: c.risk.amountUsd * base.spreadBps / 10000, netProfitUsd,
+      this.opportunity = { ...base, executionMode: c.executionMode || 'bridge', assetId: c.inventory?.assetId || '', ...(inventoryReserveRaw ? { inventoryReserveRaw, inventoryAvailableRaw: this.availableInventory(sellChain), closedInventory: false } : {}), tokenAmount: value(buy.amountOutRaw, buy.toToken.decimals), grossProfitUsd: c.risk.amountUsd * base.spreadBps / 10000, netProfitUsd, ...(c.mode === 'live' ? { stressNetProfitUsd: quality.stressNetProfitUsd } : {}),
         slippageUsd: Math.max(0, expectedProceeds - conservativeProceeds), gasUsd, bridgeFeeUsd, priceImpactBps: Math.max(...quotes.map(q => q.priceImpactBps)),
         estimatedRentUsd: quotes.reduce((sum,q)=>sum+(q.estimatedRentUsd || 0),0), estimatedRentIncludedInFees: true,
-        expiresAt: new Date(Math.min(...quotes.map(q => Date.parse(q.expiresAt)))).toISOString(), reasons: [...new Set(reasons)], executable: reasons.length === 0,
+        expiresAt: new Date(Math.min(...quotes.map(q => Date.parse(q.expiresAt)))).toISOString(), reasons: [...new Set(reasons)], qualityPassed: reasons.length === 0, executable: !this.verificationOnly && reasons.length === 0,
+        quoteTiming: quotes.map(q => ({ kind: q.kind, fromChain: q.fromChain, toChain: q.toChain, requestedAt: q.requestedAt ?? null, receivedAt: q.receivedAt ?? null, validatedAt: q.validatedAt ?? null, expiresAt: q.expiresAt })),
         valuation: 'USDT/USDC 按 1 美元面值估算；原生币费用按配置参考价折算' };
       this.plan = { buy, bridge, sell, inventoryReserveRaw, estimate: structuredClone(this.opportunity) };
-    } catch (e) { if (revision === this.configRevision) this.opportunity = { ...base, reasons: [...new Set([...reasons, this.errorText(e)])], executable: false }; }
+    } catch (e) { if (revision === this.configRevision) this.opportunity = { ...base, reasons: [...new Set([...reasons, this.errorText(e)])], qualityPassed: false, executable: false }; }
   }
   start() {
     if (this.configuring) throw safeError('配置更新进行中，请稍候');
@@ -249,7 +271,8 @@ export class Engine {
     const trade = { id: randomUUID(), type, mode: this.config.mode, status: 'QUOTED', createdAt: now(), updatedAt: now(), legs: [], valuation: { bnbUsd: this.config.chains.bnb.nativeUsd, solUsd: this.config.chains.solana.nativeUsd, stableUsd: 1 }, ...data, ...policyRecord(this.config) };
     this.store.saveTrade(trade); this.event(trade, 'QUOTED', { estimate: data.estimate }); return trade;
   }
-  async runLeg(trade, name, quote) {
+  async runLeg(trade, name, quote, { verifyPlan } = {}) {
+    this.assertExecutionAllowed();
     this.executionGuard?.();
     assertPolicyUnchanged(trade, this.config);
     const expected = intentForLeg(trade, name);
@@ -260,12 +283,16 @@ export class Engine {
     assertPolicyUnchanged(trade, this.config);
     this.validateIntent(quote, expected, trade.policySnapshot);
     this.executionGuard?.();
+    verifyPlan?.();
     if (trade.executionMode === 'inventory' && ['BUY','SELL'].includes(name)) this.reserveInventory(trade, name === 'BUY' ? trade.estimate.inventoryReserveRaw : quote.amountInRaw);
     this.store.saveQuote({ ...quote, tradeId: trade.id, leg: name, capturedAt: now(), policyFingerprint: trade.policyFingerprint });
     // Durable intent is committed before any provider broadcast. Never automatically replay it.
     this.event(trade, `${name}_SUBMITTING`, { pendingQuoteId: quote.id });
     let submission;
-    submission = await this.adapter.submit(quote, { onSubmitted: async sent => {
+    submission = await this.adapter.submit(quote, { beforeBroadcast: () => {
+      this.executionGuard?.(); assertPolicyUnchanged(trade, this.config);
+      this.validateIntent(quote, expected, trade.policySnapshot); verifyPlan?.();
+    }, onSubmitted: async sent => {
       const logged = { name, quoteId: quote.id, hash: sent.hash, submission: sent, status: 'SUBMITTED' };
       trade.legs.push(logged); this.event(trade, `${name}_SUBMITTED`, { legs: trade.legs });
     } });
@@ -292,6 +319,7 @@ export class Engine {
     return receipt;
   }
   async execute() {
+    this.assertExecutionAllowed();
     if (this.busy || this.refreshing || this.configuring) throw safeError('已有任务或配置更新执行中，请稍候');
     this.busy = true;
     let trade;
@@ -308,25 +336,31 @@ export class Engine {
       if (stats.executions >= this.config.risk.maxExecutions || stats.cumulativeUsd + estimate.amountUsd > this.config.risk.maxCumulativeUsd + 1e-9) throw safeError('套利执行额度不足');
       this.store.reserveExecution(trade.id, estimate.amountUsd);
       if (trade.executionMode === 'inventory') this.reserveInventory(trade, plan.inventoryReserveRaw);
-      const bought = await this.runLeg(trade, 'BUY', plan.buy);
+      const planQuotes = plan.bridge ? [plan.buy, plan.bridge, plan.sell] : [plan.buy, plan.sell];
+      const bought = await this.runLeg(trade, 'BUY', plan.buy, { verifyPlan: () => this.assertPlanQuality(planQuotes, { spentUsd: trade.amountUsd }) });
       // The next leg is constructed only from confirmed, attributed receipt amounts.
       let bridged, converted;
       if (trade.executionMode === 'inventory') converted = convertInventoryAmount(bought.receivedRaw, this.token(trade.buyChain).decimals, this.token(trade.sellChain).decimals, trade.sellChain);
       else {
         const bridge = await this.adapter.quoteTokenBridge({ fromChain: trade.buyChain, toChain: trade.sellChain, fromToken: this.token(trade.buyChain), toToken: this.token(trade.sellChain), amountRaw: bought.receivedRaw });
-        bridged = await this.runLeg(trade, 'BRIDGE', bridge);
+        this.validateIntent(bridge, intentForLeg(trade, 'BRIDGE'), trade.policySnapshot);
+        const previewSellIntent = swapIntent(trade.sellChain, this.token(trade.sellChain), this.token(trade.sellChain, 'stable'), bridge.minOutRaw);
+        const previewSell = await this.adapter.quoteSwap({ chain: trade.sellChain, fromToken: previewSellIntent.fromToken, toToken: previewSellIntent.toToken, amountRaw: previewSellIntent.amountInRaw });
+        this.validateIntent(previewSell, previewSellIntent, trade.policySnapshot);
+        const bridgePlan = [bridge, previewSell], spentUsd = value(bought.spentRaw, this.token(trade.buyChain, 'stable').decimals);
+        this.store.saveQuote({ ...previewSell, tradeId: trade.id, leg: 'SELL_PREBRIDGE_RECHECK', capturedAt: now(), policyFingerprint: trade.policyFingerprint });
+        const currentNet = this.assertPlanQuality(bridgePlan, { trade, spentUsd });
+        this.event(trade, 'BRIDGE_QUOTED', { currentBridgeEstimatedProfitUsd: currentNet });
+        bridged = await this.runLeg(trade, 'BRIDGE', bridge, { verifyPlan: () => this.assertPlanQuality(bridgePlan, { trade, spentUsd }) });
       }
       const sell = await this.adapter.quoteSwap({ chain: trade.sellChain, fromToken: this.token(trade.sellChain), toToken: this.token(trade.sellChain, 'stable'), amountRaw: converted?.amountRaw || bridged.receivedRaw });
-      if (trade.executionMode === 'inventory') {
-        const alreadySpent = value(bought.spentRaw,this.token(trade.buyChain,'stable').decimals);
-        const settledFees = trade.legs.reduce((sum,leg)=>sum+leg.receipt.feeUsd+leg.receipt.rentUsd,0);
-        const currentNet = value(sell.minOutRaw,this.token(trade.sellChain,'stable').decimals)-alreadySpent-settledFees-sell.feeUsd;
-        this.store.saveQuote({ ...sell, tradeId: trade.id, leg: 'SELL_RECHECK', capturedAt: now(), policyFingerprint: trade.policyFingerprint });
-        this.event(trade,'SELL_QUOTED',{ currentSellEstimatedProfitUsd: currentNet });
-        if (!finite(currentNet) || currentNet < this.config.risk.minProfitUsd) throw safeError('买入已确认，但当前卖出报价未达到净利润门槛，已暂停等待人工核对库存');
-      }
+      const alreadySpent = value(bought.spentRaw,this.token(trade.buyChain,'stable').decimals);
+      this.store.saveQuote({ ...sell, tradeId: trade.id, leg: 'SELL_RECHECK', capturedAt: now(), policyFingerprint: trade.policyFingerprint });
+      const sellQuality = this.planQualityReasons([sell], { trade, spentUsd: alreadySpent });
+      this.event(trade,'SELL_QUOTED',{ currentSellEstimatedProfitUsd: sellQuality.netProfitUsd });
+      if (sellQuality.reasons.length) throw safeError(`买入已确认，当前卖出计划未通过复核，已暂停等待人工核对：${sellQuality.reasons.join('；')}`);
       // Changed quotes must still obey price impact and minimum output; a failure pauses exposure.
-      const sold = await this.runLeg(trade, 'SELL', sell);
+      const sold = await this.runLeg(trade, 'SELL', sell, { verifyPlan: () => this.assertPlanQuality([sell], { trade, spentUsd: alreadySpent }) });
       this.event(trade, 'RECONCILING');
       const spentUsd = value(bought.spentRaw, this.token(trade.buyChain, 'stable').decimals);
       const receivedUsd = value(sold.receivedRaw, this.token(trade.sellChain, 'stable').decimals);
@@ -427,6 +461,7 @@ export class Engine {
     } finally { this.quoteBuilders--; }
   }
   async executeBridge({ quoteId }) {
+    this.assertExecutionAllowed();
     if (this.busy || this.configuring) throw safeError('已有交易或配置更新执行中');
     const preview = this.bridgeQuotes.get(quoteId);
     if (!preview || !quoteFresh(preview)) throw safeError('跨链报价不存在或已过期，请重新报价');
