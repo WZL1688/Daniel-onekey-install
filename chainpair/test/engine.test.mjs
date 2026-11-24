@@ -307,6 +307,29 @@ function useMockLiveInventory(engine, adapter) {
   engine.config.inventory = { assetId: 'manual:preflight-live', mappingConfirmed: true, mappingEvidence: 'Offline 1:1 fixture only', scanApprovedAssets: false };
 }
 
+test('persistent global stop blocks every new execution entry independently of UI pause state', async t => {
+  const { engine, adapter, store } = await setup(t);
+  store.setMeta('execution.global-stop.v1', { enabled: true }); engine.pausedReason = '';
+  assert.throws(() => engine.start(), /全局停止/);
+  await assert.rejects(engine.execute(), /全局停止/);
+  await assert.rejects(engine.runLeg({}, 'BUY', {}), /全局停止/);
+  await assert.rejects(engine.executeBridge({ quoteId: 'unused' }), /全局停止/);
+  assert.equal(adapter.sent.length, 0);
+});
+
+test('global stop arriving at the final adapter callback prevents broadcast and retains the intent for review', async t => {
+  const { engine, adapter, store } = await setup(t);
+  const submit = adapter.submit.bind(adapter);
+  adapter.submit = async (quote, options) => {
+    store.setMeta('execution.global-stop.v1', { enabled: true });
+    options.beforeBroadcast();
+    return submit(quote, options);
+  };
+  await assert.rejects(engine.execute(), /全局停止/);
+  assert.equal(adapter.sent.length, 0);
+  assert.equal(store.allTrades()[0].status, 'NEEDS_REVIEW');
+});
+
 test('live inventory checks both unsigned swaps before the first durable buy intent', async t => {
   const { engine, adapter, store } = await setup(t);
   useMockLiveInventory(engine, adapter);

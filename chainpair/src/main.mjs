@@ -20,6 +20,11 @@ import { projectDirectory } from './opportunities/catalogs.mjs';
 import { OpportunityQualityService } from './opportunities/quality.mjs';
 import { LiveReadinessService } from './live-readiness.mjs';
 import { BnbApprovalService } from './bnb-approval.mjs';
+import { ResearchStore } from './onchain-research/store.mjs';
+import { OnchainQuoteClient } from './onchain-research/quotes.mjs';
+import { OnchainPaperEngine } from './onchain-research/paper.mjs';
+import { OnchainResearchService } from './onchain-research/service.mjs';
+import { sharedOkxReadGate } from './provider-budget.mjs';
 
 const major = Number(process.versions.node.split('.')[0]);
 if (major < 24) throw new Error('请安装 Node.js 24 LTS 或更新版本');
@@ -30,6 +35,8 @@ mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 const runtimeLock = acquireRuntimeLock(dataDir);
 process.once('exit', () => runtimeLock.release());
 const store = new Store(dataDir);
+sharedOkxReadGate.configure({ store });
+const researchStore = new ResearchStore({ dataDir });
 const marketNetwork = new MarketNetwork({ store });
 await marketNetwork.prepare().catch(() => {});
 const browserWallets = new BrowserWalletBridge({ store });
@@ -48,7 +55,10 @@ const inventoryCoordinator = new InventoryCoordinator({ engine, scanner: opportu
 const qualityService = new OpportunityQualityService({ engine, scanner: opportunityService }).start();
 const readinessService = new LiveReadinessService({ engine, scanner: opportunityService });
 const approvalService = new BnbApprovalService({ engine, readiness: readinessService });
-const { server, url } = await startLocalServer({ engine, store, vault, browserWallets, reviewService, radarService, opportunityService, inventoryCoordinator, qualityService, readinessService, approvalService });
+const researchQuotes = new OnchainQuoteClient({ engine });
+const paperEngine = new OnchainPaperEngine({ store: researchStore, quoteClient: researchQuotes });
+const researchService = new OnchainResearchService({ engine, scanner: opportunityService, store: researchStore, quoteClient: researchQuotes, paper: paperEngine }).start();
+const { server, url } = await startLocalServer({ engine, store, vault, browserWallets, reviewService, radarService, opportunityService, inventoryCoordinator, qualityService, readinessService, approvalService, researchService });
 console.log(`\n双链套利工作台已启动\n本机地址：${url}\n数据目录：${dataDir}\n模式：${engine.config.mode === 'demo' ? '演示（不会广播链上交易）' : '实盘（本机保险库需解锁；插件钱包需连接）'}\n按 Ctrl+C 退出。\n`);
 console.log('浏览器地址必须包含端口号；请使用上面显示的完整本机地址。');
 console.log(`只读自动扫描：${opportunityService.enabled ? '已开启；正在发现 BNB／Solana 候选并读取公开行情' : '当前关闭；请在“同币机会”点击“开启自动发现与扫描”'}。自动交易单独控制。`);
@@ -58,12 +68,12 @@ if (process.argv.includes('--open') && !process.argv.includes('--no-open')) {
 }
 let closing = false;
 async function shutdown() {
-  if (closing) return; closing = true; engine.stop(); browserWallets.close(); reviewService.stop(); radarService.stop(); opportunityService.stop(); qualityService.stop();
+  if (closing) return; closing = true; engine.stop(); browserWallets.close(); reviewService.stop(); radarService.stop(); opportunityService.stop(); qualityService.stop(); researchService.stop();
   console.log('停止接收新请求。正在关闭本机服务；在途交易下次启动必须人工核对。');
   server.close(); server.closeIdleConnections?.();
   void marketNetwork.close().catch(() => {});
   // A forced shutdown never retries a persisted intent when the process restarts.
-  setTimeout(() => { try { vault.lock(); store.close(); } finally { process.exit(0); } }, 1000).unref();
+  setTimeout(() => { try { vault.lock(); researchStore.close(); store.close(); } finally { process.exit(0); } }, 1000).unref();
 }
 process.on('SIGINT', shutdown); process.on('SIGTERM', shutdown);
 process.on('unhandledRejection', () => { engine.pause('后台任务发生异常，请查看本机档案'); console.error('后台任务失败，已暂停新交易。'); });

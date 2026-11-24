@@ -47,11 +47,13 @@ export class BnbApprovalService {
   }
   available() {
     const e = this.engine;
+    if (e.store.getMeta?.('execution.global-stop.v1')?.enabled === true) throw ownError('全局停止已启用，禁止准备或发送真实授权');
     if (this.busy || e.busy || e.refreshing || e.configuring || e.quoteBuilders) throw ownError('已有交易、报价或配置任务，请稍候再操作授权');
     if (e.pausedReason || e.store.allTrades().some(trade => !terminal.has(trade.status))) throw ownError('交易档案仍有未完成或待核对记录，禁止发送新的授权');
   }
   contextCurrent(intent, { signing = false, tradeId } = {}) {
     const e = this.engine;
+    if (e.store.getMeta?.('execution.global-stop.v1')?.enabled === true) throw ownError('全局停止已启用，有限授权已停止');
     if (intent.expiresAtMs <= this.now() || this.now() < intent.createdAtMs) throw ownError('有限授权审阅已过期，请重新预检后生成');
     if (intent.parentRevision !== e.configRevision || intent.parentFingerprint !== this.fingerprint() || intent.walletBinding !== this.walletBinding()) throw ownError('钱包或配置已变化，有限授权审阅已失效');
     if (e.pausedReason || e.store.allTrades().some(trade => trade.id !== tradeId && !terminal.has(trade.status))) throw ownError('存在未完成或待核对交易，有限授权已停止');

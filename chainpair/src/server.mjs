@@ -6,12 +6,13 @@ import { normalizeWalletAddress } from './vault.mjs';
 import { APP_VERSION } from './version.mjs';
 import { buildPerformanceEvidence } from './performance.mjs';
 import { validId } from './opportunities/registry.mjs';
+import { sharedOkxReadGate } from './provider-budget.mjs';
 
 const isEqual=(a,b)=>{if(typeof a!=='string'||typeof b!=='string')return false;const left=Buffer.from(a),right=Buffer.from(b);return left.length===right.length&&timingSafeEqual(left,right);};
 const safe=(message)=>Object.assign(new Error(message),{safe:true});
 const asyncRoute=(handler)=>(req,res,next)=>Promise.resolve(handler(req,res)).catch(next);
 const cookieValue=(raw,name)=>{for(const cookie of (raw||'').split(';')){const i=cookie.indexOf('=');if(cookie.slice(0,i).trim()===name)return cookie.slice(i+1).trim();}return '';};
-export function createApp({engine,store,vault,browserWallets,reviewService,radarService,opportunityService,inventoryCoordinator,qualityService,readinessService,approvalService,publicDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../public')}={}){
+export function createApp({engine,store,vault,browserWallets,reviewService,radarService,opportunityService,inventoryCoordinator,qualityService,readinessService,approvalService,researchService,publicDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../public')}={}){
   const app=express();app.disable('x-powered-by');
   app.use((req,res,next)=>{res.setHeader('X-ChainPair-Version',APP_VERSION);next();});
   const busy=()=>engine.busy||engine.snapshot()?.engine?.busy;
@@ -42,6 +43,7 @@ export function createApp({engine,store,vault,browserWallets,reviewService,radar
   const quality=()=>{if(!qualityService)throw safe('真实只读报价复核未启用，请更新并重启程序');return qualityService;};
   const readiness=()=>{if(!readinessService)throw safe('实盘预检未启用，请更新并重启程序');return readinessService;};
   const approvals=()=>{if(!approvalService)throw safe('有限授权服务未启用，请更新并重启程序');return approvalService;};
+  const research=()=>{if(!researchService)throw safe('链上研究服务未启用，请更新并重启程序');return researchService;};
   const registryChange=()=>{if(engine.busy||engine.configuring)throw safe('交易或配置更新进行中，暂不能变更同币清单');};
   const assetId=value=>{if(typeof value!=='string'||!value||value.length>160)throw safe('同币清单编号无效');return value;};
   const expectedMode=value=>{if(!['demo','live'].includes(value)||value!==engine.config.mode)throw safe('页面运行模式已变化，请刷新并核对模拟／实盘后重试');};
@@ -65,7 +67,26 @@ export function createApp({engine,store,vault,browserWallets,reviewService,radar
     if(!['GET','HEAD'].includes(req.method)&&!isEqual(req.headers['x-csrf-token'],csrfToken))return res.status(403).json({error:'请求校验失败，请刷新页面'});
     next();
   });
-  app.get('/api/state',asyncRoute(async(req,res)=>res.json({...(await engine.snapshot()),appVersion:APP_VERSION,features:{opportunities:Boolean(opportunityService),quality:Boolean(qualityService),performance:typeof store?.allTrades==='function',liveReadiness:Boolean(readinessService),bnbApprovals:Boolean(approvalService)}})));
+  app.get('/api/state',asyncRoute(async(req,res)=>res.json({...(await engine.snapshot()),appVersion:APP_VERSION,features:{opportunities:Boolean(opportunityService),quality:Boolean(qualityService),performance:typeof store?.allTrades==='function',liveReadiness:Boolean(readinessService),bnbApprovals:Boolean(approvalService),onchainResearch:Boolean(researchService)}})));
+  app.get('/api/onchain-research',asyncRoute(async(req,res)=>res.json(research().snapshot())));
+  app.get('/api/onchain-research/history',asyncRoute(async(req,res)=>{
+    const kind=req.query.kind||'quote';if(typeof kind!=='string'||!['quote','paper-trade','paper-event','equity'].includes(kind))throw safe('研究历史类型无效');
+    res.json(research().store.list(kind,{page:Number(req.query.page)||1,pageSize:20}));
+  }));
+  app.post('/api/onchain-research/settings',asyncRoute(async(req,res)=>{
+    if(!req.body?.settings||typeof req.body.settings!=='object'||Array.isArray(req.body.settings))throw safe('研究设置须为对象');res.json(research().saveSettings(req.body.settings));
+  }));
+  app.post('/api/onchain-research/quote',asyncRoute(async(req,res)=>{res.status(202).json(research().requestQuote({assetId:validId(req.body?.assetId),revision:req.body?.revision,amountUsd:req.body?.amountUsd,buyChain:req.body?.buyChain}));}));
+  app.post('/api/onchain-research/matrix',asyncRoute(async(req,res)=>{res.status(202).json(research().requestMatrix({assetId:validId(req.body?.assetId),revision:req.body?.revision}));}));
+  app.post('/api/onchain-research/paper/start',asyncRoute(async(req,res)=>res.json(research().paperStart({assetId:validId(req.body?.assetId),revision:req.body?.revision,capitalPerChainUsd:req.body?.capitalPerChainUsd??100,risk:req.body?.risk}))));
+  app.post('/api/onchain-research/paper/pause',asyncRoute(async(req,res)=>res.json(research().paperPause())));
+  app.post('/api/onchain-research/paper/resume',asyncRoute(async(req,res)=>res.json(research().paperResume())));
+  app.post('/api/onchain-research/paper/settings',asyncRoute(async(req,res)=>{
+    if(research().busy)throw safe('paper正在处理，请稍候更改风控');research().paper.setSettings(req.body?.risk);res.json(research().snapshot());
+  }));
+  app.post('/api/onchain-research/paper/run',asyncRoute(async(req,res)=>res.status(202).json(research().paperRun())));
+  app.post('/api/onchain-research/stop',asyncRoute(async(req,res)=>res.json(research().globalStop())));
+  app.post('/api/onchain-research/clear-stop',asyncRoute(async(req,res)=>res.json(research().clearStop({confirmed:req.body?.confirmed}))));
   app.get('/api/live-readiness',asyncRoute(async(req,res)=>res.json(readiness().snapshot())));
   app.post('/api/live-readiness/check',asyncRoute(async(req,res)=>{
     expectedMode(req.body?.expectedMode);
@@ -216,7 +237,7 @@ export function createApp({engine,store,vault,browserWallets,reviewService,radar
   }));
   app.post('/api/wallets/unlock',asyncRoute(async(req,res)=>{await withWalletChange(async()=>{vault.unlock(req.body?.password);if(vault.publicStatus().coingeckoConfigured)await opportunityService?.credentialsChanged?.();scheduleWalletRefresh();});res.json(vault.publicStatus());}));
   app.post('/api/wallets/lock',asyncRoute(async(req,res)=>{await withWalletChange(async()=>{vault.lock();scheduleWalletRefresh();await radarService?.credentialsChanged();await opportunityService?.credentialsChanged?.();});res.json(vault.publicStatus());}));
-  app.post('/api/okx/credentials',asyncRoute(async(req,res)=>{let result;await withWalletChange(async()=>{result=vault.setOkxCredentials(req.body);scheduleWalletRefresh();});res.json(result);}));
+  app.post('/api/okx/credentials',asyncRoute(async(req,res)=>{let result;await withWalletChange(async()=>{result=vault.setOkxCredentials(req.body);sharedOkxReadGate.credentialsChanged();scheduleWalletRefresh();});res.json(result);}));
   app.post('/api/bridge/quote',asyncRoute(async(req,res)=>{
     const {fromChain,toChain,amountUsd}=req.body||{};
     if(!['bnb','solana'].includes(fromChain)||!['bnb','solana'].includes(toChain)||fromChain===toChain||typeof amountUsd!=='number'||!Number.isFinite(amountUsd)||amountUsd<=0)throw safe('请选择不同链并输入正数金额');

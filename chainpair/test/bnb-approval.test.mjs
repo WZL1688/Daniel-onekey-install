@@ -20,6 +20,12 @@ const stamp = () => new Date().toISOString();
 const safe = message => Object.assign(new Error(message), { safe: true });
 const hex = value => '0x' + BigInt(value).toString(16);
 
+test('global stop cannot be bypassed by clearing only the UI pause reason before approval', async t => {
+  const ctx = fixture(t);
+  ctx.engine.store.setMeta('execution.global-stop.v1', { enabled: true }); ctx.engine.pausedReason = '';
+  await assert.rejects(ctx.service.prepare({ reportId: 'report-fixture', index: 0 }), /全局停止/);
+});
+
 function fixture(t, options = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'bnb-approval-'));
   const store = new Store(dir), config = structuredClone(DEFAULT_CONFIG), wallet = Wallet.createRandom();

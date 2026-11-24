@@ -4,13 +4,14 @@ import { createOpportunitiesView } from './opportunities.js';
 import { createScannerBoard } from './scanner-board.js';
 import { createQualityPanel } from './quality-panel.js';
 import { createLiveReadinessPanel } from './live-readiness.js';
+import { createOnchainResearchView } from './onchain-research.js';
 const $ = (s, base = document) => base.querySelector(s);
 const $$ = (s, base = document) => [...base.querySelectorAll(s)];
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const chainName = chain => chain === 'bnb' ? 'BNB Chain' : 'Solana';
 const shortChain = chain => chain === 'bnb' ? 'BNB' : 'SOL';
 const chainKeys = ['bnb', 'solana'];
-const APP_UI_VERSION = '1.9.0';
+const APP_UI_VERSION = '3.0.0';
 const pageNames = {market:'行情首页',settings:'设置与钱包',bridge:'跨链',trades:'交易档案',notes:'备忘录'};
 const number = (value, decimals = 2) => value === undefined || value === null || !Number.isFinite(Number(value)) ? '—' : Number(value).toLocaleString('en-US', {minimumFractionDigits:decimals,maximumFractionDigits:decimals});
 const usd = (value, decimals = 4) => value === undefined || value === null || !Number.isFinite(Number(value)) ? '—' : '$' + number(value,decimals);
@@ -24,12 +25,15 @@ let state = null, csrfToken = '', tab = 'market', tradePage = 1, notePage = 1, b
 let reviewDay = '', reviewReport = null, reviewView = 0, reviewRequest = 0, tradeRequest = 0;
 const priceHistory = {bnb:[], solana:[]};
 let walletSigning = null, marketView = 'arbitrage';
+let stateEpoch = 0;
 const radarView = createRadarView({ api, toast });
 const opportunitiesView = createOpportunitiesView({ api, toast, getState: () => state });
 const scannerBoard = createScannerBoard({ api, toast, getState: () => state, onOpenAsset: id => { marketView = 'opportunities'; setTab('market'); opportunitiesView.openAsset(id); } });
 const qualityPanel = createQualityPanel({ api, toast, getState: () => state, onOpenAsset: id => { marketView = 'opportunities'; setTab('market'); opportunitiesView.openAsset(id); } });
 const liveReadinessPanel = createLiveReadinessPanel({ api, toast, getState: () => state, onOpenSettings: () => setTab('settings') });
-function marketSubnav() { return '<div class="market-subnav" aria-label="行情视图"><button class="button small" data-market-view="arbitrage" aria-current="page">套利看板</button><button class="button secondary small" data-market-view="radar">Meme 雷达</button><button class="button secondary small" data-market-view="opportunities">同币机会</button></div>'; }
+const researchView = createOnchainResearchView({ api, toast, getState: () => state, onOpenAsset: id => { marketView = 'opportunities'; setTab('market'); opportunitiesView.openAsset(id); } });
+function addResearchNav() { if (state?.features?.onchainResearch && !$('#main [data-market-view=research]')) { const button = document.createElement('button'); button.type='button'; button.className='button secondary small'; button.dataset.marketView='research'; button.textContent='链上研究'; $('#main .market-subnav')?.append(button); } }
+function marketSubnav() { return '<div class="market-subnav" aria-label="行情视图"><button class="button small" data-market-view="arbitrage" aria-current="page">套利看板</button><button class="button secondary small" data-market-view="radar">Meme 雷达</button><button class="button secondary small" data-market-view="opportunities">同币机会</button>'+(state?.features?.onchainResearch?'<button class="button secondary small" data-market-view="research">链上研究</button>':'')+'</div>'; }
 const walletConnector = createWalletConnector({ api, onNotice: toast, onChange: () => { void refresh(); }, onSigning: info => { walletSigning = info.active ? info : null; renderSigningBanner(); } });
 
 async function api(path, options = {}) {
@@ -57,7 +61,7 @@ function updateBuildVersion() {
 async function action(button, fn, success) {
   if(button?.disabled) return;
   if(button) button.disabled = true;
-  try { const result = await fn(); if(success) toast(success); await refresh(); return result; }
+  try { const result = await fn(); if(result?.config && result?.engine){stateEpoch++;state=result;updateBuildVersion();} if(success) toast(success); await refresh(); return result; }
   catch(error) { toast(error.message,true); }
   finally { if(button?.isConnected) button.disabled = false; }
 }
@@ -95,9 +99,11 @@ function flowStatus() {
   return -1;
 }
 function renderMarket() {
-  if (marketView === 'opportunities') { scannerBoard.unmount(); qualityPanel.unmount(); liveReadinessPanel.unmount(); radarView.unmount(); opportunitiesView.mount($('#main')); return; }
+  if (marketView === 'research' && state?.features?.onchainResearch) { scannerBoard.unmount(); qualityPanel.unmount(); liveReadinessPanel.unmount(); radarView.unmount(); opportunitiesView.unmount(); researchView.mount($('#main')); return; }
+  researchView.unmount();
+  if (marketView === 'opportunities') { scannerBoard.unmount(); qualityPanel.unmount(); liveReadinessPanel.unmount(); radarView.unmount(); opportunitiesView.mount($('#main')); addResearchNav(); return; }
   opportunitiesView.unmount();
-  if (marketView === 'radar') { scannerBoard.unmount(); qualityPanel.unmount(); liveReadinessPanel.unmount(); radarView.mount($('#main')); if(!$('#main [data-market-view=opportunities]')) { const button=document.createElement('button'); button.className='button secondary small'; button.dataset.marketView='opportunities'; button.textContent='同币机会'; $('#main .market-subnav')?.append(button); } return; }
+  if (marketView === 'radar') { scannerBoard.unmount(); qualityPanel.unmount(); liveReadinessPanel.unmount(); radarView.mount($('#main')); if(!$('#main [data-market-view=opportunities]')) { const button=document.createElement('button'); button.className='button secondary small'; button.dataset.marketView='opportunities'; button.textContent='同币机会'; $('#main .market-subnav')?.append(button); } addResearchNav(); return; }
   radarView.unmount();
   const o = state.opportunity || {}, e = state.engine || {}, risk = state.config.risk || {}, stats = state.stats || {};
   const reasons = o.reasons || ['等待行情与报价'];
@@ -307,17 +313,17 @@ async function renderNotes(){
 }
 async function loadNotes(){try{const p=pagedData(await api(`/api/notes?page=${notePage}`));if(tab!=='notes')return;$('#notes-data').innerHTML=`<div class="notes-list">${p.items.length?p.items.map(note=>`<article class="card note-item"><div class="note-head"><time>${time(note.createdAt)}</time><button class="button text small" data-delete-note="${escape(note.id)}">删除</button></div><div class="note-content">${escape(note.content ?? note.text)}</div></article>`).join(''):'<section class="card empty-state"><span class="empty-icon">▧</span><strong>把第一条观察记在这里</strong><p>代币信息、操作计划和交易复盘，都可以随时翻阅。</p></section>'}${pager(p,'note')}</div>`;bindPager('note',p,async page=>{notePage=page;await loadNotes();});$$('[data-delete-note]').forEach(button=>button.addEventListener('click',async()=>{if(button.dataset.confirm!=='true'){button.dataset.confirm='true';button.textContent='确认删除';setTimeout(()=>{if(button.isConnected){delete button.dataset.confirm;button.textContent='删除';}},5000);return;}const result=await action(button,()=>api(`/api/notes/${encodeURIComponent(button.dataset.deleteNote)}`,{method:'DELETE'}),'备忘录已删除');if(result)await loadNotes();}));}catch(error){if(tab==='notes')$('#notes-data').innerHTML=`<div class="error-box">${escape(error.message)}</div>`;}}
 
-function setTab(name){if(!pageNames[name])name='market';if(tab!==name)liveReadinessPanel.unmount();if(name!=='market'){scannerBoard.unmount(); qualityPanel.unmount();radarView.unmount();opportunitiesView.unmount();}if(tab==='bridge'&&name!=='bridge')invalidateBridgeQuote();tab=name;$$('.nav-item').forEach(button=>button.classList.toggle('active',button.dataset.tab===tab));$('#breadcrumb').textContent=pageNames[tab];window.history.replaceState(null,'','#'+tab);if(!state)return;renderTab();window.scrollTo({top:0,behavior:'instant'});}
+function setTab(name){if(!pageNames[name])name='market';if(tab!==name)liveReadinessPanel.unmount();if(name!=='market'){researchView.unmount();scannerBoard.unmount(); qualityPanel.unmount();radarView.unmount();opportunitiesView.unmount();}if(tab==='bridge'&&name!=='bridge')invalidateBridgeQuote();tab=name;$$('.nav-item').forEach(button=>button.classList.toggle('active',button.dataset.tab===tab));$('#breadcrumb').textContent=pageNames[tab];window.history.replaceState(null,'','#'+tab);if(!state)return;renderTab();window.scrollTo({top:0,behavior:'instant'});}
 function renderTab(){if(tab==='market')renderMarket();if(tab==='settings')renderSettings();if(tab==='bridge')renderBridge();if(tab==='trades')renderTrades();if(tab==='notes')renderNotes();}
-document.addEventListener('click',event=>{const view=event.target.closest('[data-market-view]');if(view){event.preventDefault();marketView=['radar','opportunities'].includes(view.dataset.marketView)?view.dataset.marketView:'arbitrage';if(tab==='market')renderMarket();return;}const button=event.target.closest('[data-tab]');if(button){event.preventDefault();setTab(button.dataset.tab);}});
+document.addEventListener('click',event=>{const view=event.target.closest('[data-market-view]');if(view){event.preventDefault();marketView=['radar','opportunities',...(state?.features?.onchainResearch?['research']:[])].includes(view.dataset.marketView)?view.dataset.marketView:'arbitrage';if(tab==='market')renderMarket();return;}const button=event.target.closest('[data-tab]');if(button){event.preventDefault();setTab(button.dataset.tab);}});
 $('#dialog-close').addEventListener('click',()=>$('#detail-dialog').close());$('#detail-dialog').addEventListener('click',event=>{if(event.target===$('#detail-dialog')){const r=event.target.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)event.target.close();}});
 $('#app-version-reload')?.addEventListener('click',()=>window.location.reload());
 async function refresh(){
-  if(requestBusy)return;requestBusy=true;
-  try{state=await api('/api/state');updateBuildVersion();walletConnector.syncServerState(state.wallets);updateWalletPanels();$('#server-dot').className='status-dot good';$('#server-status').textContent='本机服务已连接';$('#mode-badge').textContent=state.config.mode==='demo'?'模拟模式':'实盘模式';$('#mode-badge').className='badge '+(state.config.mode==='demo'?'amber':'green');
+  if(requestBusy)return;requestBusy=true;const epoch=stateEpoch;
+  try{const next=await api('/api/state');if(epoch!==stateEpoch)return;state=next;updateBuildVersion();walletConnector.syncServerState(state.wallets);updateWalletPanels();$('#server-dot').className='status-dot good';$('#server-status').textContent='本机服务已连接';$('#mode-badge').textContent=state.config.mode==='demo'?'模拟模式':'实盘模式';$('#mode-badge').className='badge '+(state.config.mode==='demo'?'amber':'green');
     chainKeys.forEach(chain=>{const m=state.market?.[chain],p=Number(m?.priceUsd);if(m&&Number.isFinite(p)&&p>0){const last=priceHistory[chain].at(-1);if(last!==p||priceHistory[chain].length<2){priceHistory[chain].push(p);if(priceHistory[chain].length>50)priceHistory[chain].shift();}}});
     if(state.engine?.activeTradeId){try{const r=await api(`/api/trades/${encodeURIComponent(state.engine.activeTradeId)}`);activeTrade=r.trade||r;}catch{activeTrade=null;}}else activeTrade=null;
-    if(tab==='market'){if(marketView==='radar')void radarView.refresh();else if(marketView==='opportunities')void opportunitiesView.refresh();else renderMarket();}
+    if(tab==='market'){if(marketView==='research'&&state?.features?.onchainResearch)void researchView.refresh();else if(marketView==='radar')void radarView.refresh();else if(marketView==='opportunities')void opportunitiesView.refresh();else renderMarket();}
   }catch(error){$('#server-dot').className='status-dot bad';$('#server-status').textContent='本机服务未连接';if(!state)$('#main').innerHTML=`<div class="empty-state"><strong>无法连接本机服务</strong><p>${escape(error.message)}。请确认启动程序正在运行，然后刷新页面。</p></div>`;}
   finally{requestBusy=false;}
 }

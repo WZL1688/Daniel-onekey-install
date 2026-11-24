@@ -4,6 +4,7 @@ import { VersionedTransaction, PublicKey, TransactionMessage, AddressLookupTable
 import bs58 from 'bs58';
 import Decimal from 'decimal.js';
 import { RpcPool } from './rpc.mjs';
+import { sharedOkxReadGate } from '../provider-budget.mjs';
 
 class AdapterError extends Error { constructor(message) { super(message); this.safe = true; } }
 const CHAINS = { bnb: '56', solana: '501' };
@@ -142,8 +143,9 @@ export function validateSolanaSimulationTokens({ quote, beforeAccounts, afterAcc
 }
 
 export class LiveAdapter {
-  constructor({ getConfig, vault, browserWallets, onRpcStatus = () => {}, fetchImpl = globalThis.fetch, marketFetchImpl = fetchImpl, confirmationTimeoutMs = 180000, bridgeTimeoutMs = 1800000, browserTransactionTimeoutMs = 15000 }) {
+  constructor({ getConfig, vault, browserWallets, onRpcStatus = () => {}, fetchImpl = globalThis.fetch, marketFetchImpl = fetchImpl, confirmationTimeoutMs = 180000, bridgeTimeoutMs = 1800000, browserTransactionTimeoutMs = 15000, rateGate = fetchImpl === globalThis.fetch ? sharedOkxReadGate : null }) {
     this.getConfig = getConfig; this.vault = vault; this.fetch = fetchImpl;
+    this.rateGate = rateGate;
     this.marketFetch = marketFetchImpl;
     this.browserWallets = browserWallets; this.browserTransactionTimeoutMs = browserTransactionTimeoutMs;
     this.confirmationTimeoutMs = confirmationTimeoutMs; this.bridgeTimeoutMs = bridgeTimeoutMs;
@@ -156,12 +158,14 @@ export class LiveAdapter {
     const credentials = await this.vault.getOkxCredentials();
     const apiKey = credentials?.apiKey, secret = credentials?.secretKey ?? credentials?.apiSecret, passphrase = credentials?.passphrase;
     if (!apiKey || !secret || !passphrase) throw new AdapterError('请先配置并解锁 OKX API 凭据');
+    await this.rateGate?.acquire();
     const query = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)]));
     const requestPath = path + (query.size ? `?${query}` : ''), timestamp = new Date().toISOString();
     const headers = { 'OK-ACCESS-KEY': apiKey, 'OK-ACCESS-PASSPHRASE': passphrase, 'OK-ACCESS-TIMESTAMP': timestamp,
       'OK-ACCESS-SIGN': createHmac('sha256', secret).update(timestamp + 'GET' + requestPath).digest('base64') };
     if (this.getConfig().okx?.projectId) headers['OK-ACCESS-PROJECT'] = this.getConfig().okx.projectId;
     const response = await this.fetch(`https://web3.okx.com${requestPath}`, { headers, signal: AbortSignal.timeout(15000), redirect: 'error' });
+    this.rateGate?.observe(response);
     if (!response.ok) throw new AdapterError(`OKX HTTP ${response.status}：请检查权限、限流或网络`);
     const body = await response.json();
     if (String(body.code) !== '0') throw new AdapterError(`OKX ${String(body.code).replace(/[^0-9A-Za-z_-]/g, '').slice(0, 30)}：报价服务拒绝请求，请检查 API 权限、代币、额度及路线支持`);

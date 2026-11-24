@@ -25,7 +25,10 @@ export class Engine {
     this.inventoryCoordinator = null; this.executionGuard = null;
     this.verificationOnly = verificationOnly === true;
   }
-  assertExecutionAllowed() { if (this.verificationOnly) throw safeError('真实只读复核禁止签名、广播或执行交易'); }
+  assertExecutionAllowed() {
+    if (this.verificationOnly) throw safeError('真实只读复核禁止签名、广播或执行交易');
+    if (this.store.getMeta?.('execution.global-stop.v1')?.enabled === true) throw safeError('全局停止已启用，禁止签名或发送新交易');
+  }
   errorText(error) { const text = errText(error); return this.vault.redact ? this.vault.redact(text) : text; }
   async init() {
     await this.makeAdapter();
@@ -258,6 +261,7 @@ export class Engine {
     } catch (e) { if (revision === this.configRevision) this.opportunity = { ...base, reasons: [...new Set([...reasons, this.errorText(e)])], qualityPassed: false, executable: false }; }
   }
   start() {
+    this.assertExecutionAllowed();
     if (this.configuring) throw safeError('配置更新进行中，请稍候');
     if (this.pausedReason) throw safeError('请先核对待处理交易并确认');
     this.running = true; void this.refresh().catch(e => { this.lastError = this.errorText(e); }); return this.snapshot();
@@ -290,6 +294,7 @@ export class Engine {
     this.event(trade, `${name}_SUBMITTING`, { pendingQuoteId: quote.id });
     let submission;
     submission = await this.adapter.submit(quote, { beforeBroadcast: () => {
+      this.assertExecutionAllowed();
       this.executionGuard?.(); assertPolicyUnchanged(trade, this.config);
       this.validateIntent(quote, expected, trade.policySnapshot); verifyPlan?.();
     }, onSubmitted: async sent => {
